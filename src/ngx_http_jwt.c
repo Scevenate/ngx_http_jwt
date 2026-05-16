@@ -12,12 +12,14 @@ typedef struct {
     ngx_str_t iss;
 } ngx_http_jwt_loc_conf_t;
 
-static char *ngx_conf_set_jwks_file_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_conf_set_jwks_slot_from_file(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
 static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *prev, void *conf);
 
 static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf);
+static ngx_int_t ngx_http_jwt_postconfiguration_iteration (ngx_conf_t *cf, ngx_http_location_queue_t *lq);
+static ngx_int_t ngx_http_jwt_postconfiguration_location (ngx_conf_t *cf, ngx_http_core_loc_conf_t *sclcf);
 
 static ngx_command_t  ngx_http_jwt_commands[] = {
   { ngx_string("jwt"),
@@ -29,7 +31,7 @@ static ngx_command_t  ngx_http_jwt_commands[] = {
     
   { ngx_string("jwks_file"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE2,
-      ngx_conf_set_jwks_file_slot,
+      ngx_conf_set_jwks_slot_from_file,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_jwt_loc_conf_t, jwks),
       NULL },
@@ -73,7 +75,7 @@ ngx_module_t  ngx_http_jwt_module = {
     NGX_MODULE_V1_PADDING
 };
 
-static char *ngx_conf_set_jwks_file_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+static char *ngx_conf_set_jwks_slot_from_file(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     char *p = conf;
 
     jwk_set_t *field;
@@ -134,15 +136,14 @@ static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf)
     ngx_http_core_srv_conf_t   **cscf;
     ngx_http_location_queue_t   *lq;
     ngx_queue_t                 *queue, *q;
-    ngx_http_core_loc_conf_t    *clcf, *sclcf;
-    ngx_http_jwt_loc_conf_t     *jwt_lcf;
+    ngx_http_core_loc_conf_t    *clcf;
     
 
     cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
     cscf = cmcf->servers.elts;
 
     for (s = 0; s < cmcf->servers.nelts; s++) {
-        clcf = cscf[s]->ctx->loc_conf[ngx_http_jwt_module.ctx_index];
+        clcf = cscf[s]->ctx->loc_conf[ngx_http_core_module.ctx_index];
         queue = clcf->locations;
 
         if (queue == NULL) {
@@ -154,26 +155,52 @@ static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf)
              q = ngx_queue_next(q)) {
             lq = ngx_queue_data(q, ngx_http_location_queue_t, queue);
 
-            sclcf = lq->exact ? lq->exact : lq->inclusive;
-
-            if (sclcf == NULL) {
-                continue;
-            }
-
-            jwt_lcf = sclcf->loc_conf[ngx_http_jwt_module.ctx_index];
-
-            if (ngx_strcmp(jwt_lcf->iss.data, "none") == 0) {
-                ngx_str_null(&jwt_lcf->iss);
-            }
-
-            if (jwt_lcf->enable == 1) {
-                if (jwt_lcf->jwks == NULL) {
-                    ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "jwks is required");
-                    return NGX_ERROR;
-                }
+            if (ngx_http_jwt_postconfiguration_iteration(cf, lq) != NGX_OK) {
+                return NGX_ERROR;
             }
         }
   }
 
   return NGX_OK;
+}
+
+static ngx_int_t ngx_http_jwt_postconfiguration_iteration (ngx_conf_t *cf, ngx_http_location_queue_t *lq) {
+    if (lq->exact != NULL && ngx_http_jwt_postconfiguration_location(cf, lq->exact) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (lq->inclusive != NULL && ngx_http_jwt_postconfiguration_location(cf, lq->inclusive) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (!ngx_queue_empty(&lq->list)) {
+        ngx_http_location_queue_t *lqx;
+        ngx_queue_t *qx;
+        for (qx = ngx_queue_head(&lq->list);
+             qx != ngx_queue_sentinel(&lq->list);
+             qx = ngx_queue_next(qx)) {
+            lqx = ngx_queue_data(qx, ngx_http_location_queue_t, list);
+            if (ngx_http_jwt_postconfiguration_iteration(cf, lqx) != NGX_OK) {
+                return NGX_ERROR;
+            }
+        }
+    }
+    return NGX_OK;
+}
+
+static ngx_int_t ngx_http_jwt_postconfiguration_location (ngx_conf_t *cf, ngx_http_core_loc_conf_t *sclcf) {
+    ngx_http_jwt_loc_conf_t *jwt_lcf = sclcf->loc_conf[ngx_http_jwt_module.ctx_index];
+
+    if (ngx_strcmp(jwt_lcf->iss.data, "none") == 0) {
+        ngx_str_null(&jwt_lcf->iss);
+    }
+
+    if (jwt_lcf->enable == 1) {
+        if (jwt_lcf->jwks == NULL) {
+            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "jwks is required");
+            return NGX_ERROR;
+        }
+    }
+
+    return NGX_OK;
 }
