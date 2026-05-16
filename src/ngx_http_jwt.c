@@ -1,18 +1,26 @@
-#include "ngx_conf_file.h"
-#include "ngx_string.h"
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
 #include <jwt.h>
 
+#define NGX_HTTP_JWT_DEFAULT_ERROR_CODE NGX_HTTP_FORBIDDEN
+
 typedef struct {
     ngx_flag_t enable;
     jwk_set_t *jwks;
-    ngx_int_t error_code;
     ngx_str_t iss;
+    ngx_int_t error_code;
 } ngx_http_jwt_loc_conf_t;
 
 static char *ngx_conf_set_jwks_slot_from_file(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_conf_check_iss_slot(ngx_conf_t *cf, void *post, void *field);
+static ngx_conf_post_t ngx_conf_check_iss_slot_post = {
+    ngx_conf_check_iss_slot
+};
+static char *ngx_conf_check_error_code_slot(ngx_conf_t *cf, void *post, void *np);
+static ngx_conf_post_t ngx_conf_check_error_code_slot_post = {
+    ngx_conf_check_error_code_slot
+};
 
 static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *prev, void *conf);
@@ -38,10 +46,17 @@ static ngx_command_t  ngx_http_jwt_commands[] = {
 
   { ngx_string("jwt_iss"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
-      ngx_conf_set_str_slot,
+      ngx_conf_set_num_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_jwt_loc_conf_t, iss),
-      NULL },
+      &ngx_conf_check_iss_slot_post },
+
+  { ngx_string("jwt_error_code"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_jwt_loc_conf_t, error_code),
+      &ngx_conf_check_error_code_slot_post },
 
   ngx_null_command
 };
@@ -90,16 +105,38 @@ static char *ngx_conf_set_jwks_slot_from_file(ngx_conf_t *cf, ngx_command_t *cmd
 
     value = cf->args->elts;
 
-    field = jwks_create_fromfile((const char*) value[1].data);
+    char *filename = ngx_palloc(cf->pool, value[1].len + 1);
+    ngx_memcpy(filename, value[1].data, value[1].len);
+    filename[value[1].len] = '\0';
+
+    field = jwks_create_fromfile(filename);
+
+    ngx_free(filename);
 
     if (field == NULL) {
-        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "failed to create jwk set from file %s", value[1].data);
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "failed to create jwk set from file %V", value[1]);
         return NGX_CONF_ERROR;
     }
 
-    if (cmd->post) {
-        post = cmd->post;
-        return post->post_handler(cf, post, field);
+    return NGX_CONF_OK;
+}
+
+static char *ngx_conf_check_iss_slot(ngx_conf_t *cf, void *post, void *field) {
+    ngx_str_t *iss = field;
+
+    if (ngx_strcmp(iss->data, "none") == 0) {
+        ngx_str_null(iss);
+    }
+
+    return NGX_CONF_OK;
+}
+
+static char *ngx_conf_check_error_code_slot(ngx_conf_t *cf, void *post, void *np) {
+    ngx_int_t *error_code = np;
+
+    if (*error_code < 300 || *error_code > 599) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "Invalid error code for jwt_error_code");
+        return NGX_CONF_ERROR;
     }
 
     return NGX_CONF_OK;
@@ -111,10 +148,10 @@ static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
         return NULL;
     }
 
-    conf->enable = NGX_CONF_UNSET_UINT;
+    conf->enable = 0;
     conf->jwks = NGX_CONF_UNSET_PTR;
-    conf->error_code = NGX_CONF_UNSET;
     ngx_str_null(&conf->iss);
+    conf->error_code = NGX_HTTP_JWT_DEFAULT_ERROR_CODE;
     return conf;
 }
 
@@ -124,8 +161,10 @@ static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *chi
 
     ngx_conf_merge_uint_value(conf->enable, prev->enable, 0);
     ngx_conf_merge_ptr_value(conf->jwks, prev->jwks, NGX_CONF_UNSET_PTR);
-    ngx_conf_merge_str_value(conf->iss, prev->iss, "none");
-    ngx_conf_merge_value(conf->error_code, prev->error_code, NGX_HTTP_FORBIDDEN);
+    if (conf->iss.data == NULL && prev->iss.data) {
+        conf->iss = prev->iss; //  No good macro impl for merging w/ null string default
+    }
+    ngx_conf_merge_value(conf->error_code, prev->error_code, NGX_HTTP_JWT_DEFAULT_ERROR_CODE);
     return NGX_CONF_OK;
 }
 
@@ -190,10 +229,6 @@ static ngx_int_t ngx_http_jwt_postconfiguration_iteration (ngx_conf_t *cf, ngx_h
 
 static ngx_int_t ngx_http_jwt_postconfiguration_location (ngx_conf_t *cf, ngx_http_core_loc_conf_t *sclcf) {
     ngx_http_jwt_loc_conf_t *jwt_lcf = sclcf->loc_conf[ngx_http_jwt_module.ctx_index];
-
-    if (ngx_strcmp(jwt_lcf->iss.data, "none") == 0) {
-        ngx_str_null(&jwt_lcf->iss);
-    }
 
     if (jwt_lcf->enable == 1) {
         if (jwt_lcf->jwks == NULL) {
