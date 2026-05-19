@@ -1,6 +1,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <jansson.h>
 #include <jwt.h>
 
 #define NGX_HTTP_JWT_DEFAULT_ERROR_CODE NGX_HTTP_FORBIDDEN
@@ -28,6 +29,9 @@ static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *prev, void *conf)
 static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf);
 static ngx_int_t ngx_http_jwt_postconfiguration_iteration (ngx_conf_t *cf, ngx_http_location_queue_t *lq);
 static ngx_int_t ngx_http_jwt_postconfiguration_location (ngx_conf_t *cf, ngx_http_core_loc_conf_t *sclcf);
+
+static ngx_int_t ngx_http_jwt_check_handler(ngx_http_request_t *r);
+static int ngx_http_jwt_checker_callback(jwt_t *jwt, jwt_config_t *config); // config->ctx is ngx_http_request_t *r
 
 static ngx_command_t  ngx_http_jwt_commands[] = {
   { ngx_string("jwt"),
@@ -165,7 +169,11 @@ static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *chi
     ngx_http_jwt_loc_conf_t *conf = child;
 
     ngx_conf_merge_uint_value(conf->enable, prev->enable, 0);
-    ngx_conf_merge_ptr_value(conf->jwks, prev->jwks, NGX_CONF_UNSET_PTR);
+    if (conf->jwks == NGX_CONF_UNSET_PTR) {
+        conf->jwks = prev->jwks;
+    } else if (prev->jwks != NGX_CONF_UNSET_PTR) {
+        jwks_free(conf->jwks); // Free previous jwks
+    }
     if (conf->iss.data == NULL && prev->iss.data) {
         conf->iss = prev->iss; //  No good macro impl for merging w/ null string default
     }
@@ -203,9 +211,18 @@ static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf)
         }
   }
 
+  ngx_http_handler_pt *handler;
+
+  handler = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
+  if (handler == NULL) {
+    return NGX_ERROR;
+  }
+  *handler = ngx_http_jwt_check_handler;
+
   return NGX_OK;
 }
 
+// Iterate recursive queue
 static ngx_int_t ngx_http_jwt_postconfiguration_iteration (ngx_conf_t *cf, ngx_http_location_queue_t *lcfq) {
     ngx_http_location_queue_t *lq;
 
@@ -241,4 +258,102 @@ static ngx_int_t ngx_http_jwt_postconfiguration_location (ngx_conf_t *cf, ngx_ht
     }
 
     return NGX_OK;
+}
+
+static ngx_int_t ngx_http_jwt_check_handler(ngx_http_request_t *r) {
+    ngx_http_jwt_loc_conf_t *jwt_lcf = r->loc_conf[ngx_http_jwt_module.ctx_index];
+
+    if (jwt_lcf->enable == 0) {
+        return NGX_DECLINED;
+    }
+
+    ngx_int_t error_code = jwt_lcf->error_code;
+
+    // Fetch
+
+    ngx_table_elt_t *authorization;
+    ngx_int_t len;
+    char *token;
+    
+    authorization = r->headers_in.authorization;
+    len = authorization->value.len - sizeof("Bearer ") + 1;
+    if (authorization == NULL ||
+        len < 0 ||
+        ngx_strncasecmp(authorization->value.data, (u_char *) "Bearer ", sizeof("Bearer ") - 1) != 0) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: Invalid authorization header");
+        return error_code;
+    }
+
+    token = ngx_palloc(r->pool, len + 1);
+    ngx_memcpy(token, authorization->value.data + sizeof("Bearer ") - 1, len);
+    token[len] = '\0';
+
+    // Verify
+
+    jwt_checker_t *checker = jwt_checker_new();
+    if (checker == NULL) {
+        ngx_free(token);
+        jwt_checker_free(checker);
+        return error_code;
+    }
+
+    // iss
+    char* iss = NULL;
+    if (jwt_lcf->iss.data != NULL) {
+        iss = ngx_palloc(r->pool, jwt_lcf->iss.len + 1);
+        ngx_memcpy(iss, jwt_lcf->iss.data, jwt_lcf->iss.len);
+        iss[jwt_lcf->iss.len] = '\0';
+        jwt_checker_claim_set(checker, JWT_CLAIM_ISS, iss);
+    }
+
+    // callback
+    jwt_checker_setcb(checker, ngx_http_jwt_checker_callback, r);
+    if (jwt_checker_verify(checker, token) != 0) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT verification failed");
+        ngx_free(token);
+        jwt_checker_free(checker);
+        if (iss != NULL) ngx_free(iss);
+        return error_code;
+    }
+
+    ngx_free(token);
+    jwt_checker_free(checker);
+    if (iss != NULL) ngx_free(iss);
+    return NGX_DECLINED;
+}
+
+static int ngx_http_jwt_checker_callback(jwt_t *jwt, jwt_config_t *config) {
+    ngx_http_request_t *r = (ngx_http_request_t *) config->ctx;
+    ngx_http_jwt_loc_conf_t *jwt_lcf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
+
+    // Set key & alg
+
+    jwt_value_t kid;
+    jwt_set_GET_STR(&kid, "kid");
+
+    if (jwt_header_get(jwt, &kid) != JWT_VALUE_ERR_NONE || kid.str_val == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT verification: No kid provided");
+        return 1;
+    }
+
+    jwk_item_t *key = jwks_find_bykid(jwt_lcf->jwks, kid.str_val);
+    if (key == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT verification: No key found for kid");
+        return 1;
+    }
+
+    config->key = key;
+    config->alg = jwt_get_alg(jwt);
+
+    // Verify ngx_http_jwt claim
+
+    jwt_value_t ngx_http_jwt;
+    jwt_set_GET_STR(&ngx_http_jwt, "ngx_http_jwt");
+
+    if (jwt_claim_get(jwt, &ngx_http_jwt) != JWT_VALUE_ERR_NONE || ngx_http_jwt.str_val == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT verification: No ngx_http_jwt claim provided");
+        return 1;
+    }
+
+    return 0;
 }
