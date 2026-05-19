@@ -1,6 +1,6 @@
 # ngx_http_jwt
 
-*Nginx http filter module for JWT authorization*
+*Nginx http module for JWT authorization*
 
 ## Usage
 
@@ -17,13 +17,14 @@ http {
 
         jwt on;
         jwks_file /app/jwks;
+        jwt_error_code 404; # Default is 403
 
         location /static/ {
             jwt off;
         }
 
         location /admin/ {
-            jwt_iss v3;
+            jwt_iss v3; # Checks iss claim. "none" is reserved for explicitly turning it off.
         }
     }
 }
@@ -36,7 +37,7 @@ http {
     "exp": 1778777777,
     "nbf": 1778700000,
     "iss": "v3",
-    "nginx": {
+    "ngx_http_jwt": {
         "servers": [
             {
                 "server_name": "localhost",

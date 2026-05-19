@@ -118,6 +118,11 @@ static char *ngx_conf_set_jwks_slot_from_file(ngx_conf_t *cf, ngx_command_t *cmd
         return NGX_CONF_ERROR;
     }
 
+    if (cmd->post) {
+        post = cmd->post;
+        return post->post_handler(cf, post, field);
+    }
+
     return NGX_CONF_OK;
 }
 
@@ -171,30 +176,28 @@ static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *chi
 static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf)
 {
     ngx_http_core_main_conf_t   *cmcf;
-    ngx_uint_t                   s;
     ngx_http_core_srv_conf_t   **cscf;
-    ngx_http_location_queue_t   *lq;
-    ngx_queue_t                 *queue, *q;
     ngx_http_core_loc_conf_t    *clcf;
+    ngx_queue_t                 *clcfq;
+    ngx_http_location_queue_t   *lcfq;
     
-
     cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
     cscf = cmcf->servers.elts;
 
-    for (s = 0; s < cmcf->servers.nelts; s++) {
+    for (ngx_uint_t s = 0; s < cmcf->servers.nelts; s++) {
         clcf = cscf[s]->ctx->loc_conf[ngx_http_core_module.ctx_index];
-        queue = clcf->locations;
+        clcfq = clcf->locations;
 
-        if (queue == NULL) {
+        if (clcfq == NULL) {
             continue;
         }
 
-        for (q = ngx_queue_head(queue);
-             q != ngx_queue_sentinel(queue);
+        for (ngx_queue_t *q = ngx_queue_head(clcfq);
+             q != ngx_queue_sentinel(clcfq);
              q = ngx_queue_next(q)) {
-            lq = ngx_queue_data(q, ngx_http_location_queue_t, queue);
+            lcfq = ngx_queue_data(q, ngx_http_location_queue_t, queue);
 
-            if (ngx_http_jwt_postconfiguration_iteration(cf, lq) != NGX_OK) {
+            if (ngx_http_jwt_postconfiguration_iteration(cf, lcfq) != NGX_OK) {
                 return NGX_ERROR;
             }
         }
@@ -203,23 +206,23 @@ static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf)
   return NGX_OK;
 }
 
-static ngx_int_t ngx_http_jwt_postconfiguration_iteration (ngx_conf_t *cf, ngx_http_location_queue_t *lq) {
-    if (lq->exact != NULL && ngx_http_jwt_postconfiguration_location(cf, lq->exact) != NGX_OK) {
+static ngx_int_t ngx_http_jwt_postconfiguration_iteration (ngx_conf_t *cf, ngx_http_location_queue_t *lcfq) {
+    ngx_http_location_queue_t *lq;
+
+    if (lcfq->exact != NULL && ngx_http_jwt_postconfiguration_location(cf, lcfq->exact) != NGX_OK) {
         return NGX_ERROR;
     }
 
-    if (lq->inclusive != NULL && ngx_http_jwt_postconfiguration_location(cf, lq->inclusive) != NGX_OK) {
+    if (lcfq->inclusive != NULL && ngx_http_jwt_postconfiguration_location(cf, lcfq->inclusive) != NGX_OK) {
         return NGX_ERROR;
     }
 
-    if (!ngx_queue_empty(&lq->list)) {
-        ngx_http_location_queue_t *lqx;
-        ngx_queue_t *qx;
-        for (qx = ngx_queue_head(&lq->list);
-             qx != ngx_queue_sentinel(&lq->list);
-             qx = ngx_queue_next(qx)) {
-            lqx = ngx_queue_data(qx, ngx_http_location_queue_t, list);
-            if (ngx_http_jwt_postconfiguration_iteration(cf, lqx) != NGX_OK) {
+    if (!ngx_queue_empty(&lcfq->list)) {
+        for (ngx_queue_t *q = ngx_queue_head(&lcfq->list);
+             q != ngx_queue_sentinel(&lcfq->list);
+             q = ngx_queue_next(q)) {
+            lq = ngx_queue_data(q, ngx_http_location_queue_t, list);
+            if (ngx_http_jwt_postconfiguration_iteration(cf, lq) != NGX_OK) {
                 return NGX_ERROR;
             }
         }
