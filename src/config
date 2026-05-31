@@ -1,11 +1,14 @@
 #!/bin/bash # So everyone knows it's a shell script. This script is intended to be . (source) interpreted so it makes no difference.
 
-ngx_module_type=HTTP_FILTER
+ngx_module_type=HTTP
 ngx_module_name=ngx_http_jwt_module
-ngx_module_incs="$ngx_addon_dir/ngx_http_jwt.h"
+ngx_module_incs="$ngx_addon_dir"
 ngx_module_deps=
-ngx_module_srcs="$ngx_addon_dir/ngx_http_jwt.c"
-ngx_module_libs="jwt"
+ngx_module_srcs="$ngx_addon_dir/ngx_http_jwt.c \
+                  $ngx_addon_dir/ngx_http_jwt_jwk.c \
+                  $ngx_addon_dir/ngx_http_jwt_request.c \
+                  $ngx_addon_dir/ngx_http_jwt_json.c"
+ngx_module_libs="jansson jwt"
 
 # Default ngx_module_order should work.
 

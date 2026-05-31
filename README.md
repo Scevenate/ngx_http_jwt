@@ -1,57 +1,18 @@
 # ngx_http_jwt
 
-*Nginx http filter module for JWT authorization*
+*Nginx http module for JWT*
 
-## Usage
+## Overview
 
-```nginx.conf
+## Quick start
 
-# events {}
+## Build from source
 
-http {
-    server {
-        listen 80;
-        server_name localhost;
-
-        root /app/public;
-
-        jwt on;
-        jwks_file /app/jwks;
-
-        location /static/ {
-            jwt off;
-        }
-
-        location /admin/ {
-            jwt_iss v3;
-        }
-    }
-}
-
-```
-
-```JSON
-
-{
-    "exp": 1778777777,
-    "nbf": 1778700000,
-    "iss": "v3",
-    "nginx": {
-        "servers": [
-            {
-                "server_name": "localhost",
-                "locations": [
-                    "/"
-                ]
-            }
-        ]
-    }
-}
-
-```
-
-## Build
+The project is intended to be built as a static module using standard nginx build system.
 
 Dependencies:
-1. `nginx` (Last compatibility check 1.31.0)
-2. `libjwt` (Last compatibility check 3.2.2)
+1. `nginx (>= 1.31.0)` ([CVSS 9.2](https://nvd.nist.gov/vuln/detail/CVE-2026-42945) for 1.30.0)
+2. `jansson (>= 2.15.0)` (required by `libjwt`)
+3. `libjwt (>= 3.3.3)` ([CVSS 9.1](https://nvd.nist.gov/vuln/detail/CVE-2026-44699) for 3.3.2)
+
+You might also need other libraries to build nginx. (`openssl`, `PCRE2`, etc.)
