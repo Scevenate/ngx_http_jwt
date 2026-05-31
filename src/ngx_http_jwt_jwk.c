@@ -11,11 +11,13 @@
 #include <string.h>
 
 
-typedef struct {
+struct ngx_http_jwt_jwk_jwks_node_s {
     char *path;
     jwk_set_t *jwks;
-    struct ngx_http_jwt_jwks_node_t *next;
-} ngx_http_jwt_jwk_jwks_node_t;
+    struct ngx_http_jwt_jwk_jwks_node_s *next;
+};
+
+typedef struct ngx_http_jwt_jwk_jwks_node_s ngx_http_jwt_jwk_jwks_node_t;
 
 typedef struct {
     ngx_http_jwt_jwk_jwks_node_t *nodes[NGX_HTTP_JWT_JWKS_TABLE_SIZE];
@@ -34,9 +36,9 @@ ngx_int_t ngx_http_jwt_jwk_cycle_init() {
         ngx_http_jwt_jwk_jwks_node_t *node, *next;
 
         for (ngx_uint_t i = 0; i < NGX_HTTP_JWT_JWKS_TABLE_SIZE; i++) {
-            node = (ngx_http_jwt_jwk_jwks_node_t *) jwks_table.nodes[i]->next;
+            node = jwks_table.nodes[i];
             while (node != NULL) {
-                next = (ngx_http_jwt_jwk_jwks_node_t *) node->next;
+                next = node->next;
                 ngx_free(node->path);
                 jwks_free(node->jwks);
                 ngx_free(node);
@@ -62,7 +64,7 @@ jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(u_char* path) {
         if (ngx_strcmp(node->path, (char *) path) == 0) {
             return node->jwks;
         }
-        node = (ngx_http_jwt_jwk_jwks_node_t *) node->next;
+        node = node->next;
     }
     
     jwks = jwks_create_fromfile((char *) path);
@@ -70,10 +72,21 @@ jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(u_char* path) {
         return NULL;
     }
 
-    node = ngx_alloc(sizeof(ngx_http_jwt_jwk_jwks_node_t), NULL);
-    node->path = ngx_alloc(strlen((char *) path) + 1, NULL);
+    node = ngx_calloc(sizeof(ngx_http_jwt_jwk_jwks_node_t), NULL);
+    if (node == NULL) {
+        jwks_free(jwks);
+        return NULL;
+    }
+    node->path = ngx_calloc(strlen((char *) path) + 1, NULL);
+    if (node->path == NULL) {
+        jwks_free(jwks);
+        ngx_free(node);
+        return NULL;
+    }
     strcpy(node->path, (char *) path);
     node->jwks = jwks;
-    node->next = NULL;
+
+    node->next = jwks_table.nodes[index];
+    jwks_table.nodes[index] = node;
     return node->jwks;
 }

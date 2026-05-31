@@ -2,8 +2,8 @@
 /*
  * Copyright (C) Scevenate
  *
- * JWK / JWKS management is separated primarily because these objects are provided opaque.
- * Therefore, it cannot be easily integrated into the configuration pool. The resource must be manually synchronized with cycles.
+ * JWK / JWKS is cached per cycle for configuration use.
+ * It requires separate memory management with manual synchronization with cycles.
  */
 
 
