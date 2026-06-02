@@ -59,6 +59,12 @@ typedef struct {
     ngx_int_t error_code;
 } ngx_http_jwt_loc_conf_t;
 
+typedef struct {
+    ngx_http_request_t               *r;
+    ngx_http_jwt_request_transaction_t *transaction;
+} ngx_http_jwt_request_handler_checker_callback_ctx_t;
+
+
 static ngx_int_t ngx_http_jwt_preconfiguration(ngx_conf_t *cf);
 
 static char *ngx_conf_set_jwks_slot_from_file(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
@@ -75,7 +81,7 @@ static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *prev, void *conf)
 static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf);
 
 static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r);
-static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config); // config->ctx is ngx_http_request_t *r
+static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config);
 
 static ngx_command_t  ngx_http_jwt_commands[] = {
   { ngx_string("jwt"),
@@ -162,7 +168,8 @@ static ngx_int_t ngx_http_jwt_preconfiguration(ngx_conf_t *cf) {
     return NGX_OK;
 }
 
-static char *ngx_conf_set_jwks_slot_from_file(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+static char *
+ngx_conf_set_jwks_slot_from_file(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     char *p = conf;
 
     jwk_set_t **field;
@@ -191,7 +198,8 @@ static char *ngx_conf_set_jwks_slot_from_file(ngx_conf_t *cf, ngx_command_t *cmd
     return NGX_CONF_OK;
 }
 
-static char *ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+static char *
+ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     char* p = conf;
 
     ngx_http_jwt_validate_t *field;
@@ -336,7 +344,8 @@ static char *ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void
     return NGX_CONF_OK;
 }
 
-static char *ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+static char *
+ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     char* p = conf;
 
     ngx_http_jwt_extract_t *field;
@@ -418,6 +427,7 @@ static char *ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void 
             if (ngx_strcmp(value[2].data, "json") != 0) return "got invalid claim type";
                 claim->type = JWT_VALUE_JSON;
                 break;
+        case 0:
         default:
             return "got invalid claim type";
             break;
@@ -432,7 +442,8 @@ static char *ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void 
     return NGX_CONF_OK;
 }
 
-static char *ngx_conf_check_error_code_slot(ngx_conf_t *cf, void *post, void *np) {
+static char *
+ngx_conf_check_error_code_slot(ngx_conf_t *cf, void *post, void *np) {
     ngx_int_t *error_code = np;
 
     if (*error_code < 300 || *error_code > 599) {
@@ -443,7 +454,8 @@ static char *ngx_conf_check_error_code_slot(ngx_conf_t *cf, void *post, void *np
     return NGX_CONF_OK;
 }
 
-static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
+static void *
+ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
     ngx_http_jwt_loc_conf_t *conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_jwt_loc_conf_t));
     if (conf == NULL) {
         return NULL;
@@ -568,7 +580,8 @@ static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *chi
     return NGX_CONF_OK;
 }
 
-static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf) {
+static ngx_int_t
+ngx_http_jwt_postconfiguration(ngx_conf_t *cf) {
     ngx_http_handler_pt *handler;
     ngx_http_core_main_conf_t *cmcf;
     cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
@@ -583,44 +596,59 @@ static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf) {
     return NGX_OK;
 }
 
-static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r) {
-    ngx_http_jwt_loc_conf_t *jwt_lcf = r->loc_conf[ngx_http_jwt_module.ctx_index];
+static ngx_int_t 
+ngx_http_jwt_request_handler(ngx_http_request_t *r) {
+    ngx_http_jwt_loc_conf_t            *jwt_lcf;
+    ngx_http_jwt_request_handler_checker_callback_ctx_t          ctx;
+    ngx_http_jwt_request_transaction_t  transaction;
+    ngx_table_elt_t                    *authorization;
+    ngx_int_t                           len;
+    char                               *token;
+    jwt_checker_t                      *checker;
+
+    jwt_lcf = r->loc_conf[ngx_http_jwt_module.ctx_index];
 
     if (jwt_lcf->enable == 0) {
         return NGX_DECLINED;
     }
 
-    // Fetch & filter
+    // Fetch token
 
-    ngx_table_elt_t *authorization;
-    ngx_int_t len;
-    char *token;
-    
     authorization = r->headers_in.authorization;
     if (authorization == NULL
      || authorization->value.len <= (sizeof("Bearer ") - 1)
-     || ngx_strncasecmp(authorization->value.data, (u_char *) "Bearer ", sizeof("Bearer ") - 1) != 0) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: invalid authorization header");
+     || ngx_strncasecmp(authorization->value.data, (u_char *) "Bearer ",
+                        sizeof("Bearer ") - 1) != 0)
+    {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "JWT: invalid authorization header");
         return jwt_lcf->error_code;
     }
 
     len = authorization->value.len - (sizeof("Bearer ") - 1);
 
     token = ngx_palloc(r->pool, len + 1);
+    if (token == NULL) {
+        return jwt_lcf->error_code;
+    }
     ngx_memcpy(token, authorization->value.data + (sizeof("Bearer ") - 1), len);
     token[len] = '\0';
 
-    if (jwt_lcf->filter == 1) {
-        if (ngx_http_jwt_request_filter_authorization(r) != NGX_OK) {
-            ngx_pfree(r->pool, token);
-            return jwt_lcf->error_code;
-        }
+    if (ngx_http_jwt_request_init(&transaction) != NGX_OK) {
+        ngx_pfree(r->pool, token);
+        return jwt_lcf->error_code;
     }
 
-    // Checker & callback
+    // Initialize transaction
 
-    jwt_checker_t *checker = jwt_checker_new();
+    ctx.r = r;
+    ctx.transaction = &transaction;
+
+    // Checker
+
+    checker = jwt_checker_new();
     if (checker == NULL) {
+        ngx_http_jwt_request_free(&transaction);
         ngx_pfree(r->pool, token);
         return jwt_lcf->error_code;
     }
@@ -628,18 +656,25 @@ static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r) {
     // Use custom exp / nbf check in callback for clearer responsibility boundary and better performance (use nginx cached time).
 
     if (jwt_checker_time_leeway(checker, JWT_CLAIM_EXP, -1) != 0) {
+        ngx_http_jwt_request_free(&transaction);
         ngx_pfree(r->pool, token);
         jwt_checker_free(checker);
         return jwt_lcf->error_code;
     }
     if (jwt_checker_time_leeway(checker, JWT_CLAIM_NBF, -1) != 0) {
+        ngx_http_jwt_request_free(&transaction);
         ngx_pfree(r->pool, token);
         jwt_checker_free(checker);
         return jwt_lcf->error_code;
     }
-    jwt_checker_setcb(checker, ngx_http_jwt_request_handler_checker_callback, r);
+
+    // Callback
+
+    jwt_checker_setcb(checker, ngx_http_jwt_request_handler_checker_callback,
+                      &ctx);
 
     if (jwt_checker_verify(checker, token) != 0) {
+        ngx_http_jwt_request_free(&transaction);
         ngx_pfree(r->pool, token);
         jwt_checker_free(checker);
         return jwt_lcf->error_code;
@@ -647,12 +682,27 @@ static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r) {
 
     ngx_pfree(r->pool, token);
     jwt_checker_free(checker);
+
+    // Apply transaction
+
+    if (ngx_http_jwt_request_apply(r, &transaction) != NGX_OK) {
+        return jwt_lcf->error_code;
+    }
+
     return NGX_DECLINED;
 }
 
-static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) {
-    ngx_http_request_t *r = (ngx_http_request_t *) config->ctx;
-    ngx_http_jwt_loc_conf_t *jwt_lcf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
+static int
+ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) {
+    ngx_http_jwt_request_handler_checker_callback_ctx_t         *ctx;
+    ngx_http_request_t                 *r;
+    ngx_http_jwt_request_transaction_t *transaction;
+    ngx_http_jwt_loc_conf_t            *jwt_lcf;
+
+    ctx = config->ctx;
+    r = ctx->r;
+    transaction = ctx->transaction;
+    jwt_lcf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
 
     // Set key & alg
 
@@ -715,6 +765,14 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
         }
     }
 
+    // Set authorization
+
+    if (jwt_lcf->filter == 1) {
+        if (ngx_http_jwt_request_set_authorization(r, transaction) != NGX_OK) {
+            return -1;
+        }
+    }
+
     // Validate value claims
 
     ngx_queue_t *q;
@@ -745,7 +803,10 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
                 }
                 break;
             case JWT_VALUE_STR:
-                if (ngx_strcmp(validate_claim->str_val.data, value.str_val) != 0) {
+                if (validate_claim->str_val.len != ngx_strlen(value.str_val)
+                 || ngx_strncmp(validate_claim->str_val.data, value.str_val,
+                               validate_claim->str_val.len) != 0)
+                {
                     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: validation failed");
                     return -1;
                 }
@@ -782,7 +843,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
     // Extract value claims
 
     ngx_str_t raw;
-    ngx_int_t val, len, negative;
     ngx_str_t encoded;
 
     for (q = ngx_queue_head(&jwt_lcf->extract.claims);
@@ -799,7 +859,9 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
         const ngx_str_t null_string = ngx_null_string;
 
         if (jwt_claim_get(jwt, &value) != JWT_VALUE_ERR_NONE) {
-            if (ngx_http_jwt_request_filter_header(r, extract_claim->header_name, null_string) == NGX_OK) {
+            if (ngx_http_jwt_request_set_header(r, transaction,
+                    extract_claim->header_name, null_string) == NGX_OK)
+            {
                 continue;
             }
             return -1;
@@ -813,7 +875,9 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
                 raw.len = ngx_strlen(value.str_val);
 
                 if (raw.len >= NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX) {
-                    if (ngx_http_jwt_request_filter_header(r, extract_claim->header_name, null_string) != NGX_OK) {
+                    if (ngx_http_jwt_request_set_header(r, transaction,
+                            extract_claim->header_name, null_string) != NGX_OK)
+                    {
                         return -1;
                     }
                     break;
@@ -824,7 +888,9 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
                     return -1;
                 }
                 ngx_encode_base64url(&encoded, &raw);
-                if (ngx_http_jwt_request_filter_header(r, extract_claim->header_name, encoded) != NGX_OK) {
+                if (ngx_http_jwt_request_set_header(r, transaction,
+                        extract_claim->header_name, encoded) != NGX_OK)
+                {
                     ngx_pfree(r->pool, encoded.data);
                     return -1;
                 }
@@ -832,7 +898,9 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
                 break;
             case JWT_VALUE_INT:
                 if (value.int_val > NGX_HTTP_JWT_CLAIM_VALUE_INT_MAX || value.int_val < NGX_HTTP_JWT_CLAIM_VALUE_INT_MIN) {
-                    if (ngx_http_jwt_request_filter_header(r, extract_claim->header_name, null_string) != NGX_OK) {
+                    if (ngx_http_jwt_request_set_header(r, transaction,
+                            extract_claim->header_name, null_string) != NGX_OK)
+                    {
                         return -1;
                     }
                     break;
@@ -843,7 +911,9 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
 
                 encoded.len = ngx_sprintf(encoded.data, "%d", value.int_val) - encoded.data;
 
-                if (ngx_http_jwt_request_filter_header(r, extract_claim->header_name, encoded) != NGX_OK) {
+                if (ngx_http_jwt_request_set_header(r, transaction,
+                        extract_claim->header_name, encoded) != NGX_OK)
+                {
                     ngx_pfree(r->pool, encoded.data);
                     return -1;
                 }
@@ -857,7 +927,9 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
                     encoded.data = (u_char *) "false";
                     encoded.len = 5;
                 }
-                if (ngx_http_jwt_request_filter_header(r, extract_claim->header_name, encoded) != NGX_OK) {
+                if (ngx_http_jwt_request_set_header(r, transaction,
+                        extract_claim->header_name, encoded) != NGX_OK)
+                {
                     return -1;
                 }
                 break;
@@ -866,7 +938,10 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
                 raw.len = ngx_strlen(value.json_val);
 
                 if (raw.len >= NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX) {
-                    if (ngx_http_jwt_request_filter_header(r, extract_claim->header_name, null_string) != NGX_OK) {
+                    free(value.json_val);
+                    if (ngx_http_jwt_request_set_header(r, transaction,
+                            extract_claim->header_name, null_string) != NGX_OK)
+                    {
                         return -1;
                     }
                     break;
@@ -878,7 +953,9 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
                     return -1;
                 }
                 ngx_encode_base64url(&encoded, &raw);
-                if (ngx_http_jwt_request_filter_header(r, extract_claim->header_name, encoded) != NGX_OK) {
+                if (ngx_http_jwt_request_set_header(r, transaction,
+                        extract_claim->header_name, encoded) != NGX_OK)
+                {
                     free(value.json_val);
                     ngx_pfree(r->pool, encoded.data);
                     return -1;
