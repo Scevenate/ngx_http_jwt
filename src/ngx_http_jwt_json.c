@@ -17,13 +17,12 @@ static ngx_cycle_t *cycle = NULL;
 
 json_t *ngx_http_jwt_json_loads(const char *s) {
     if (cycle == NULL) {
-        ngx_log_error(NGX_LOG_ERR, cycle->log, 0, "JSON: attempting to load JSON from string before cycle initialization");
         return NULL;
     }
 
     ngx_http_jwt_json_t *json_item;
     
-    json_item = (ngx_http_jwt_json_t *) malloc(sizeof(ngx_http_jwt_json_t));
+    json_item = (ngx_http_jwt_json_t *) ngx_alloc(sizeof(ngx_http_jwt_json_t), cycle->log);
     if (json_item == NULL) {
         return NULL;
     }
@@ -41,13 +40,12 @@ json_t *ngx_http_jwt_json_loads(const char *s) {
 
 json_t *ngx_http_jwt_json_deep_copy(json_t *json) {
     if (cycle == NULL) {
-        ngx_log_error(NGX_LOG_ERR, cycle->log, 0, "JSON: attempting to deep copy managed JSON object before cycle initialization");
         return NULL;
     }
 
     ngx_http_jwt_json_t *json_item;
     
-    json_item = (ngx_http_jwt_json_t *) malloc(sizeof(ngx_http_jwt_json_t));
+    json_item = (ngx_http_jwt_json_t *) ngx_alloc(sizeof(ngx_http_jwt_json_t), cycle->log);
     if (json_item == NULL) {
         return NULL;
     }
@@ -63,25 +61,26 @@ json_t *ngx_http_jwt_json_deep_copy(json_t *json) {
     return json_item->json;
 }
 
-ngx_int_t ngx_http_jwt_json_cycle_init(ngx_cycle_t *cycle) {
-    cycle = cycle;
+ngx_int_t ngx_http_jwt_json_cycle_init(ngx_cycle_t *new_cycle) {
+    if (cycle != NULL) {
+        ngx_queue_t *q;
+        ngx_http_jwt_json_t *json_item;
+
+        for (q = ngx_queue_head(&json_queue);
+            q != ngx_queue_sentinel(&json_queue);
+            q = ngx_queue_head(&json_queue)) {
+            json_item = (ngx_http_jwt_json_t *) ngx_queue_data(q, ngx_http_jwt_json_t, queue);
+            ngx_queue_remove(q);
+            json_decref(json_item->json);
+            free(json_item);
+        }
+    } else {
+        ngx_queue_init(&json_queue);
+    }
+
+    cycle = new_cycle;
+
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, cycle->log, 0, "JSON: cycle initialized");
 
-    if (json_queue.prev == NULL) {
-        ngx_queue_init(&json_queue);
-        return NGX_OK;
-    }
-
-    ngx_queue_t *q;
-    ngx_http_jwt_json_t *json_item;
-
-    for (q = ngx_queue_head(&json_queue);
-         q != ngx_queue_sentinel(&json_queue);
-         q = ngx_queue_head(&json_queue)) {
-        json_item = (ngx_http_jwt_json_t *) ngx_queue_data(q, ngx_http_jwt_json_t, queue);
-        ngx_queue_remove(q);
-        json_decref(json_item->json);
-        free(json_item);
-    }
     return NGX_OK;
 }

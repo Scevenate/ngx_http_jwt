@@ -698,14 +698,14 @@ static int
 ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) {
     ngx_http_jwt_request_handler_checker_callback_ctx_t         *ctx;
     ngx_http_request_t                 *r;
-    ngx_flag_t internal_server_error;
+    ngx_flag_t *internal_server_error;
     ngx_http_jwt_request_transaction_t *transaction;
     ngx_http_jwt_loc_conf_t            *jwt_lcf;
 
     ctx = config->ctx;
     r = ctx->r;
     transaction = ctx->transaction;
-    internal_server_error = ctx->internal_server_error;
+    internal_server_error = &ctx->internal_server_error;
     jwt_lcf = ngx_http_get_module_loc_conf(r, ngx_http_jwt_module);
 
     // Set key & alg
@@ -775,7 +775,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
 
     if (jwt_lcf->filter == 1) {
         if (ngx_http_jwt_request_set_authorization(r, transaction) != NGX_OK) {
-            internal_server_error = 1;
+            *internal_server_error = 1;
             return -1;
         }
     }
@@ -868,7 +868,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
             ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: claim not found");
             if (ngx_http_jwt_request_set_header(r, transaction, 
                 extract_claim->header_name, null_string) == NGX_OK) continue;
-            else internal_server_error = 1;
+            else *internal_server_error = 1;
             return -1;
         }
 
@@ -882,7 +882,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
                 if (raw.len >= NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX) {
                     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: Str claim value too long");
                     if (ngx_http_jwt_request_set_header(r, transaction, extract_claim->header_name, null_string) != NGX_OK) {
-                        internal_server_error = 1;
+                        *internal_server_error = 1;
                         return -1;
                     }
                     break;
@@ -890,7 +890,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
 
                 encoded.data = ngx_palloc(r->pool, ngx_base64_encoded_length(raw.len));
                 if (encoded.data == NULL) {
-                    internal_server_error = 1;
+                    *internal_server_error = 1;
                     return -1;
                 }
                 ngx_encode_base64url(&encoded, &raw);
@@ -898,7 +898,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
                         extract_claim->header_name, encoded) != NGX_OK)
                 {
                     ngx_pfree(r->pool, encoded.data);
-                    internal_server_error = 1;
+                    *internal_server_error = 1;
                     return -1;
                 }
                 ngx_pfree(r->pool, encoded.data);
@@ -909,7 +909,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
                     if (ngx_http_jwt_request_set_header(r, transaction,
                             extract_claim->header_name, null_string) != NGX_OK)
                     {
-                        internal_server_error = 1;
+                        *internal_server_error = 1;
                         return -1;
                     }
                     break;
@@ -917,7 +917,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
 
                 encoded.data = ngx_palloc(r->pool, NGX_ATOMIC_T_LEN);
                 if (encoded.data == NULL) {
-                    internal_server_error = 1;
+                    *internal_server_error = 1;
                     return -1;
                 }
 
@@ -927,7 +927,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
                         extract_claim->header_name, encoded) != NGX_OK)
                 {
                     ngx_pfree(r->pool, encoded.data);
-                    internal_server_error = 1;
+                    *internal_server_error = 1;
                     return -1;
                 }
                 ngx_pfree(r->pool, encoded.data);
@@ -943,7 +943,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
                 if (ngx_http_jwt_request_set_header(r, transaction,
                         extract_claim->header_name, encoded) != NGX_OK)
                 {
-                    internal_server_error = 1;
+                    *internal_server_error = 1;
                     return -1;
                 }
                 break;
@@ -957,7 +957,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
                     if (ngx_http_jwt_request_set_header(r, transaction,
                             extract_claim->header_name, null_string) != NGX_OK)
                     {
-                        internal_server_error = 1;
+                        *internal_server_error = 1;
                         return -1;
                     }
                     break;
@@ -966,7 +966,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
                 encoded.data = ngx_palloc(r->pool, ngx_base64_encoded_length(raw.len));
                 if (encoded.data == NULL) {
                     free(value.json_val);
-                    internal_server_error = 1;
+                    *internal_server_error = 1;
                     return -1;
                 }
                 ngx_encode_base64url(&encoded, &raw);
@@ -975,7 +975,7 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
                 {
                     free(value.json_val);
                     ngx_pfree(r->pool, encoded.data);
-                    internal_server_error = 1;
+                    *internal_server_error = 1;
                     return -1;
                 }
                 free(value.json_val);

@@ -18,6 +18,6 @@ json_t *ngx_http_jwt_json_loads(const char *str);
 
 json_t *ngx_http_jwt_json_deep_copy(json_t *json);
 
-ngx_int_t ngx_http_jwt_json_cycle_init(ngx_cycle_t *cycle);
+ngx_int_t ngx_http_jwt_json_cycle_init(ngx_cycle_t *new_cycle);
 
 #endif /* NGX_HTTP_JWT_JSON_H */

@@ -30,7 +30,7 @@ static inline ngx_int_t ngx_http_jwt_jwk_string_hash(u_char* str) {
     return ngx_hash_key( str, strlen((char *) str)) % NGX_HTTP_JWT_JWKS_TABLE_SIZE;
 }
 
-ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *cycle) {
+ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *new_cycle) {
     // Free previous cycle
     if (cycle != NULL) {
         ngx_http_jwt_jwk_jwks_node_t *node, *next;
@@ -47,7 +47,7 @@ ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *cycle) {
             jwks_table.nodes[i] = NULL;
         }
     }
-    cycle = cycle;
+    cycle = new_cycle;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, cycle->log, 0, "JWK: cycle initialized");
 
@@ -56,7 +56,6 @@ ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *cycle) {
 
 jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(u_char* path) {
     if (cycle == NULL) {
-        ngx_log_error(NGX_LOG_ERR, cycle->log, 0, "JWK: attempting to load JWKS from file before cycle initialization");
         return NULL;
     }
 
@@ -76,16 +75,16 @@ jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(u_char* path) {
     
     jwks = jwks_create_fromfile((char *) path);
     if (jwks == NULL) {
-        ngx_log_error(NGX_LOG_ERR, cycle->log, 0, "JWK: could not create JWKS from file");
+        // JWKS not found is a rejection. The handling relies on upper layer.
         return NULL;
     }
 
-    node = ngx_calloc(sizeof(ngx_http_jwt_jwk_jwks_node_t), NULL);
+    node = ngx_calloc(sizeof(ngx_http_jwt_jwk_jwks_node_t), cycle->log);
     if (node == NULL) {
         jwks_free(jwks);
         return NULL;
     }
-    node->path = ngx_calloc(strlen((char *) path) + 1, NULL);
+    node->path = ngx_calloc(strlen((char *) path) + 1, cycle->log);
     if (node->path == NULL) {
         jwks_free(jwks);
         ngx_free(node);

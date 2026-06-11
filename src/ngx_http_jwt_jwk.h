@@ -18,6 +18,6 @@
 
 jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(u_char* path);
 
-ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *cycle);
+ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *new_cycle);
 
 #endif /* NGX_HTTP_JWT_JWK_H */
