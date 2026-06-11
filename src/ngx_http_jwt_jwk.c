@@ -24,15 +24,15 @@ typedef struct {
 } ngx_http_jwt_jwk_jwks_table_t;
 
 static ngx_http_jwt_jwk_jwks_table_t jwks_table = { .nodes = { NULL } };
-static ngx_flag_t initialized = 0;
+static ngx_cycle_t *cycle = NULL;
 
 static inline ngx_int_t ngx_http_jwt_jwk_string_hash(u_char* str) {
     return ngx_hash_key( str, strlen((char *) str)) % NGX_HTTP_JWT_JWKS_TABLE_SIZE;
 }
 
-ngx_int_t ngx_http_jwt_jwk_cycle_init() {
+ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *cycle) {
     // Free previous cycle
-    if (initialized) {
+    if (cycle != NULL) {
         ngx_http_jwt_jwk_jwks_node_t *node, *next;
 
         for (ngx_uint_t i = 0; i < NGX_HTTP_JWT_JWKS_TABLE_SIZE; i++) {
@@ -47,12 +47,19 @@ ngx_int_t ngx_http_jwt_jwk_cycle_init() {
             jwks_table.nodes[i] = NULL;
         }
     }
-    initialized = 1;
+    cycle = cycle;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, cycle->log, 0, "JWK: cycle initialized");
 
     return NGX_OK;
 }
 
 jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(u_char* path) {
+    if (cycle == NULL) {
+        ngx_log_error(NGX_LOG_ERR, cycle->log, 0, "JWK: attempting to load JWKS from file before cycle initialization");
+        return NULL;
+    }
+
     ngx_http_jwt_jwk_jwks_node_t *node;
     jwk_set_t *jwks;
     ngx_int_t index;
@@ -69,6 +76,7 @@ jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(u_char* path) {
     
     jwks = jwks_create_fromfile((char *) path);
     if (jwks == NULL) {
+        ngx_log_error(NGX_LOG_ERR, cycle->log, 0, "JWK: could not create JWKS from file");
         return NULL;
     }
 

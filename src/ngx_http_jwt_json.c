@@ -13,8 +13,14 @@ typedef struct {
 } ngx_http_jwt_json_t;
 
 static ngx_queue_t json_queue = { .prev = NULL, .next = NULL };
+static ngx_cycle_t *cycle = NULL;
 
 json_t *ngx_http_jwt_json_loads(const char *s) {
+    if (cycle == NULL) {
+        ngx_log_error(NGX_LOG_ERR, cycle->log, 0, "JSON: attempting to load JSON from string before cycle initialization");
+        return NULL;
+    }
+
     ngx_http_jwt_json_t *json_item;
     
     json_item = (ngx_http_jwt_json_t *) malloc(sizeof(ngx_http_jwt_json_t));
@@ -25,6 +31,7 @@ json_t *ngx_http_jwt_json_loads(const char *s) {
 
     json_item->json = json_loads(s, JSON_REJECT_DUPLICATES, NULL);
     if (json_item->json == NULL) {
+        // This is reject not error
         free(json_item);
         return NULL;
     }
@@ -33,6 +40,11 @@ json_t *ngx_http_jwt_json_loads(const char *s) {
 }
 
 json_t *ngx_http_jwt_json_deep_copy(json_t *json) {
+    if (cycle == NULL) {
+        ngx_log_error(NGX_LOG_ERR, cycle->log, 0, "JSON: attempting to deep copy managed JSON object before cycle initialization");
+        return NULL;
+    }
+
     ngx_http_jwt_json_t *json_item;
     
     json_item = (ngx_http_jwt_json_t *) malloc(sizeof(ngx_http_jwt_json_t));
@@ -42,6 +54,7 @@ json_t *ngx_http_jwt_json_deep_copy(json_t *json) {
 
     json_item->json = json_deep_copy(json);
     if (json_item->json == NULL) {
+        ngx_log_error(NGX_LOG_ERR, cycle->log, 0, "JSON: could not deep copy JSON");
         free(json_item);
         return NULL;
     }
@@ -50,7 +63,10 @@ json_t *ngx_http_jwt_json_deep_copy(json_t *json) {
     return json_item->json;
 }
 
-ngx_int_t ngx_http_jwt_json_cycle_init() {
+ngx_int_t ngx_http_jwt_json_cycle_init(ngx_cycle_t *cycle) {
+    cycle = cycle;
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, cycle->log, 0, "JSON: cycle initialized");
+
     if (json_queue.prev == NULL) {
         ngx_queue_init(&json_queue);
         return NGX_OK;
