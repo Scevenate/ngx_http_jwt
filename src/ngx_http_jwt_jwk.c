@@ -4,11 +4,12 @@
  */
 
 
-#include <ngx_http_jwt_jwk.h>
 #include <ngx_config.h>
 #include <ngx_core.h>
+#include <ngx_http.h>
+#include <ngx_http_jwt_jwk.h>
+#include <ngx_http_jwt_memory.h>
 #include <jwt.h>
-#include <string.h>
 
 
 struct ngx_http_jwt_jwk_jwks_node_s {
@@ -30,6 +31,7 @@ static inline ngx_int_t ngx_http_jwt_jwk_string_hash(u_char* str) {
     return ngx_hash_key( str, strlen((char *) str)) % NGX_HTTP_JWT_JWKS_TABLE_SIZE;
 }
 
+
 ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *new_cycle) {
     // Free previous cycle
     if (cycle != NULL) {
@@ -39,9 +41,9 @@ ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *new_cycle) {
             node = jwks_table.nodes[i];
             while (node != NULL) {
                 next = node->next;
-                ngx_free(node->path);
+                ngx_http_jwt_memory_free(node->path);
                 jwks_free(node->jwks);
-                ngx_free(node);
+                ngx_http_jwt_memory_free(node);
                 node = next;
             }
             jwks_table.nodes[i] = NULL;
@@ -84,13 +86,14 @@ jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(u_char* path) {
         jwks_free(jwks);
         return NULL;
     }
-    node->path = ngx_calloc(strlen((char *) path) + 1, cycle->log);
+    node->path = ngx_pnalloc(cycle->pool, strlen((char *) path) + 1);
     if (node->path == NULL) {
         jwks_free(jwks);
-        ngx_free(node);
+        ngx_http_jwt_memory_free(node);
         return NULL;
     }
-    strcpy(node->path, (char *) path);
+    ngx_memcpy(node->path, (char *) path, strlen((char *) path));
+    node->path[strlen((char *) path)] = '\0';
     node->jwks = jwks;
 
     node->next = jwks_table.nodes[index];

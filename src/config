@@ -7,7 +7,7 @@ ngx_module_deps=
 ngx_module_srcs="$ngx_addon_dir/ngx_http_jwt.c \
                   $ngx_addon_dir/ngx_http_jwt_jwk.c \
                   $ngx_addon_dir/ngx_http_jwt_request.c \
-                  $ngx_addon_dir/ngx_http_jwt_json.c"
+                  $ngx_addon_dir/ngx_http_jwt_memory.c"
 ngx_module_libs="-ljansson -ljwt"
 
 # Default ngx_module_order should work.

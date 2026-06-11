@@ -10,27 +10,105 @@
 #include <ngx_http_jwt_request.h>
 
 
-static void
-ngx_http_jwt_request_transaction_reset(ngx_http_jwt_request_transaction_t *transaction)
-{
+static ngx_int_t ngx_http_jwt_request_apply_filter_header(ngx_http_request_t *r, ngx_str_t key, ngx_str_t value);
+
+
+ngx_int_t ngx_http_jwt_request_init(ngx_http_jwt_request_transaction_t *transaction) {
     transaction->filter_authorization = 0;
     ngx_queue_init(&transaction->filter);
+    return NGX_OK;
 }
 
+ngx_int_t ngx_http_jwt_request_free(ngx_http_request_t *r, ngx_http_jwt_request_transaction_t *transaction) {
+    ngx_queue_t *q, *next;
+    ngx_http_jwt_request_filter_header *entry;
 
-ngx_int_t
-ngx_http_jwt_request_init(ngx_http_jwt_request_transaction_t *transaction)
-{
-    ngx_http_jwt_request_transaction_reset(transaction);
+    for (q = ngx_queue_head(&transaction->filter);
+         q != ngx_queue_sentinel(&transaction->filter);
+         q = next) {
+        next = ngx_queue_next(q);
+        entry = ngx_queue_data(q, ngx_http_jwt_request_filter_header, queue);
+        ngx_pfree(r->pool, entry);
+    }
 
     return NGX_OK;
 }
 
+ngx_int_t ngx_http_jwt_request_set_authorization(ngx_http_jwt_request_transaction_t *transaction) {
+    transaction->filter_authorization = 1;
+    return NGX_OK;
+}
 
-static ngx_int_t
-ngx_http_jwt_request_apply_filter_header(ngx_http_request_t *r, ngx_str_t key,
-    ngx_str_t value)
-{
+ngx_int_t ngx_http_jwt_request_set_header(ngx_http_request_t *r,
+    ngx_http_jwt_request_transaction_t *transaction, ngx_str_t key, ngx_str_t value) {
+    ngx_http_jwt_request_filter_header *entry;
+
+    entry = ngx_palloc(r->pool, sizeof(ngx_http_jwt_request_filter_header));
+    if (entry == NULL) {
+        return NGX_ERROR;
+    }
+
+    entry->name.data = ngx_pnalloc(r->pool, key.len);
+    if (entry->name.data == NULL) {
+        ngx_pfree(r->pool, entry);
+        return NGX_ERROR;
+    }
+    entry->name.len = key.len;
+    ngx_memcpy(entry->name.data, key.data, key.len);
+
+    if (value.data == NULL) {
+        entry->value.len = 0;
+        entry->value.data = NULL;
+    } else {
+        entry->value.len = value.len;
+        entry->value.data = ngx_pnalloc(r->pool, value.len);
+        if (entry->value.data == NULL) {
+            ngx_pfree(r->pool, entry->name.data);
+            ngx_pfree(r->pool, entry);
+            return NGX_ERROR;
+        }
+        ngx_memcpy(entry->value.data, value.data, value.len);
+        entry->value.data[value.len] = '\0';
+    }
+
+    ngx_queue_insert_tail(&transaction->filter, &entry->queue);
+
+    return NGX_OK;
+}
+
+ngx_int_t ngx_http_jwt_request_apply(ngx_http_request_t *r, ngx_http_jwt_request_transaction_t *transaction) {
+    ngx_queue_t *q;
+    ngx_http_jwt_request_filter_header *entry;
+    static const ngx_str_t null_string = ngx_null_string;
+    static const ngx_str_t authorization = ngx_string("Authorization");
+
+    if (transaction->filter_authorization) {
+        r->headers_in.authorization = NULL;
+
+        if (ngx_http_jwt_request_apply_filter_header(r, authorization, null_string) != NGX_OK) {
+            ngx_http_jwt_request_free(r, transaction);
+            return NGX_ERROR;
+        }
+    }
+
+    for (q = ngx_queue_head(&transaction->filter);
+         q != ngx_queue_sentinel(&transaction->filter);
+         q = ngx_queue_next(q))
+    {
+        entry = ngx_queue_data(q, ngx_http_jwt_request_filter_header, queue);
+
+        if (ngx_http_jwt_request_apply_filter_header(r, entry->name, entry->value) != NGX_OK) {
+            ngx_http_jwt_request_free(r, transaction);
+            return NGX_ERROR;
+        }
+    }
+
+    ngx_http_jwt_request_free(r, transaction);
+
+    return NGX_OK;
+}
+
+static ngx_int_t ngx_http_jwt_request_apply_filter_header(ngx_http_request_t *r, ngx_str_t key, ngx_str_t value) {
     ngx_uint_t i;
     ngx_list_part_t *part;
     ngx_table_elt_t *hi, *h;
@@ -98,116 +176,6 @@ ngx_http_jwt_request_apply_filter_header(ngx_http_request_t *r, ngx_str_t key,
     h->value.data[value.len] = '\0';
 
     h->hash = hash;
-
-    return NGX_OK;
-}
-
-
-static ngx_int_t
-ngx_http_jwt_request_apply_filter_authorization(ngx_http_request_t *r)
-{
-    static ngx_str_t authorization = ngx_string("Authorization");
-    static ngx_str_t null_string = ngx_null_string;
-
-    r->headers_in.authorization = NULL;
-
-    return ngx_http_jwt_request_apply_filter_header(r, authorization, null_string);
-}
-
-
-ngx_int_t
-ngx_http_jwt_request_set_authorization(ngx_http_request_t *r,
-    ngx_http_jwt_request_transaction_t *transaction)
-{
-    (void) r;
-
-    if (transaction->filter_authorization) {
-        return NGX_ERROR;
-    }
-
-    transaction->filter_authorization = 1;
-
-    return NGX_OK;
-}
-
-
-ngx_int_t
-ngx_http_jwt_request_set_header(ngx_http_request_t *r,
-    ngx_http_jwt_request_transaction_t *transaction, ngx_str_t key,
-    ngx_str_t value)
-{
-    ngx_http_jwt_request_filter_header *entry;
-
-    entry = ngx_palloc(r->pool, sizeof(ngx_http_jwt_request_filter_header));
-    if (entry == NULL) {
-        return NGX_ERROR;
-    }
-
-    entry->name.len = key.len;
-    entry->name.data = ngx_pnalloc(r->pool, key.len);
-    if (entry->name.data == NULL) {
-        return NGX_ERROR;
-    }
-    ngx_memcpy(entry->name.data, key.data, key.len);
-
-    if (value.data == NULL) {
-        entry->value.len = 0;
-        entry->value.data = NULL;
-    } else {
-        entry->value.len = value.len;
-        entry->value.data = ngx_pnalloc(r->pool, value.len);
-        if (entry->value.data == NULL) {
-            return NGX_ERROR;
-        }
-        ngx_memcpy(entry->value.data, value.data, value.len);
-    }
-
-    ngx_queue_insert_tail(&transaction->filter, &entry->queue);
-
-    return NGX_OK;
-}
-
-
-ngx_int_t
-ngx_http_jwt_request_apply(ngx_http_request_t *r,
-    ngx_http_jwt_request_transaction_t *transaction)
-{
-    ngx_int_t                           rc;
-    ngx_queue_t                        *q;
-    ngx_http_jwt_request_filter_header *entry;
-
-    if (transaction->filter_authorization) {
-        rc = ngx_http_jwt_request_apply_filter_authorization(r);
-        if (rc != NGX_OK) {
-            ngx_http_jwt_request_transaction_reset(transaction);
-            return rc;
-        }
-    }
-
-    for (q = ngx_queue_head(&transaction->filter);
-         q != ngx_queue_sentinel(&transaction->filter);
-         q = ngx_queue_next(q))
-    {
-        entry = ngx_queue_data(q, ngx_http_jwt_request_filter_header, queue);
-
-        rc = ngx_http_jwt_request_apply_filter_header(r, entry->name,
-                                                        entry->value);
-        if (rc != NGX_OK) {
-            ngx_http_jwt_request_transaction_reset(transaction);
-            return rc;
-        }
-    }
-
-    ngx_http_jwt_request_transaction_reset(transaction);
-
-    return NGX_OK;
-}
-
-
-ngx_int_t
-ngx_http_jwt_request_free(ngx_http_jwt_request_transaction_t *transaction)
-{
-    ngx_http_jwt_request_transaction_reset(transaction);
 
     return NGX_OK;
 }
