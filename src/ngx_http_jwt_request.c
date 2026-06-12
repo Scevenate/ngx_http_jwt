@@ -7,7 +7,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
-#include <ngx_http_jwt_request.h>
+#include <ngx_http_jwt.h>
 
 
 static ngx_int_t ngx_http_jwt_request_apply_filter_header(ngx_http_request_t *r, ngx_str_t key, ngx_str_t value);
@@ -79,7 +79,7 @@ ngx_int_t ngx_http_jwt_request_set_header(ngx_http_request_t *r,
 ngx_int_t ngx_http_jwt_request_apply(ngx_http_request_t *r, ngx_http_jwt_request_transaction_t *transaction) {
     ngx_queue_t *q;
     ngx_http_jwt_request_filter_header *entry;
-    static const ngx_str_t null_string = ngx_null_string;
+    
     static const ngx_str_t authorization = ngx_string("Authorization");
 
     if (transaction->filter_authorization) {
@@ -116,9 +116,8 @@ static ngx_int_t ngx_http_jwt_request_apply_filter_header(ngx_http_request_t *r,
 
     part = &r->headers_in.headers.part;
     hi = part->elts;
-    h = NULL;
 
-    for (i = 0;; i++) {
+    for (i = 0;;) {
         if (i >= part->nelts) {
             if (part->next == NULL) {
                 break;
@@ -127,27 +126,32 @@ static ngx_int_t ngx_http_jwt_request_apply_filter_header(ngx_http_request_t *r,
             part = part->next;
             hi = part->elts;
             i = 0;
+            continue;
         }
 
         if (hi[i].hash != 0
          && hi[i].key.len == key.len
          && ngx_strncasecmp(hi[i].key.data, key.data, key.len) == 0)
         {
-            hi[i].hash = 0;
-            h = &hi[i];
+            /*
+             * As of nginx v1.31.0, the proxy module does not respect hash = 0 header invalidation.
+             * It still proxies the header value, so we have to actually remove the header (even it is discouraged for dealing with lists).
+             * Null string / empty string makes it an empty line with only a colon, I've tried.
+             */
+             r->headers_in.count--;
+             part->nelts--;
+             hi[i] = hi[part->nelts];
+            continue;
         }
+
+        i++;
     }
 
-    if (value.data == NULL) {
-        return NGX_OK;
-    }
+    if (value.data == NULL) return NGX_OK;
 
-    if (h == NULL) {
-        h = ngx_list_push(&r->headers_in.headers);
-        if (h == NULL) {
-            return NGX_ERROR;
-        }
-    }
+    h = ngx_list_push(&r->headers_in.headers);
+    if (h == NULL) return NGX_ERROR;
+    r->headers_in.count++;
 
     h->next = NULL;
     h->hash = 0;

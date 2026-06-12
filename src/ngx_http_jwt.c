@@ -7,42 +7,9 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
-#include <ngx_http_jwt_jwk.h>
-#include <ngx_http_jwt_memory.h>
-#include <ngx_http_jwt_request.h>
+#include <ngx_http_jwt.h>
 #include <jansson.h>
 #include <jwt.h>
-
-#define NGX_HTTP_JWT_DEFAULT_ERROR_CODE NGX_HTTP_FORBIDDEN
-
-#define NGX_HTTP_JWT_LEEWAY_MAX 2147483647
-
-#define NGX_HTTP_JWT_CLAIM_NAME_LEN_MAX 2048 // Include null terminator
-#define NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX 2048 // Include null terminator
-#define NGX_HTTP_JWT_HEADER_NAME_LEN_MAX 2048 // Include null terminator
-
-typedef struct {
-    ngx_str_t name;
-    json_t *value;
-    ngx_queue_t queue;
-} ngx_http_jwt_validate_claim_t;
-
-typedef struct {
-    ngx_int_t exp;
-    ngx_int_t nbf;
-    ngx_queue_t claims;
-} ngx_http_jwt_validate_t;
-
-typedef struct {
-    ngx_str_t claim_name;
-    ngx_str_t header_name;
-    ngx_flag_t optional;
-    ngx_queue_t queue;
-} ngx_http_jwt_extract_claim_t;
-
-typedef struct {
-    ngx_queue_t claims;
-} ngx_http_jwt_extract_t;
 
 typedef struct {
     ngx_flag_t enable;
@@ -206,6 +173,9 @@ static char *ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void
 
     // First handle exp / nbf
 
+    json_t *leeway;
+    double leeway_value;
+
     if (ngx_strcmp(value[1].data, "exp") == 0) {
         if (nelts == 3) return "expected 1 or 3 arguments for exp validation directive";
         if (field->exp != NGX_CONF_UNSET) return "is duplicate";
@@ -218,11 +188,23 @@ static char *ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void
 
         if (ngx_strcmp(value[2].data, "leeway") != 0) return "expected leeway for exp validation directive";
         
-        ngx_int_t leeway;
-        leeway = ngx_atoi(value[3].data, value[3].len); // This function only accept non negative value (documented behaviour).
-        if (leeway == NGX_ERROR || leeway > NGX_HTTP_JWT_LEEWAY_MAX) return "got invalid leeway";
+        leeway = json_loads((const char *) value[3].data, JSON_DECODE_ANY, NULL);
+        if (leeway == NULL) {
+            json_decref(leeway);
+            return "got invalid leeway";
+        }
+        if (!json_is_number(leeway)) {
+            json_decref(leeway);
+            return "got invalid leeway";
+        }
+        leeway_value = json_number_value(leeway);
+        if (leeway_value < 0 || leeway_value > NGX_HTTP_JWT_LEEWAY_MAX) {
+            json_decref(leeway);
+            return "got invalid leeway";
+        }
 
-        field->exp = leeway;
+        field->exp = leeway_value;
+        json_decref(leeway);
         return NGX_CONF_OK;
     }
     
@@ -237,12 +219,24 @@ static char *ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void
         }
 
         if (ngx_strcmp(value[2].data, "leeway") != 0) return "expected leeway for nbf validation directive";
-        
-        ngx_int_t leeway;
-        leeway = ngx_atoi(value[3].data, value[3].len); // This function only accept non negative value (documented behaviour).
-        if (leeway == NGX_ERROR || leeway > NGX_HTTP_JWT_LEEWAY_MAX) return "got invalid leeway";
 
-        field->nbf = leeway;
+        leeway = json_loads((const char *) value[3].data, JSON_DECODE_ANY, NULL);
+        if (leeway == NULL) {
+            json_decref(leeway);
+            return "got invalid leeway";
+        }
+        if (!json_is_number(leeway)) {
+            json_decref(leeway);
+            return "got invalid leeway";
+        }
+        leeway_value = json_number_value(leeway);
+        if (leeway_value < 0 || leeway_value > NGX_HTTP_JWT_LEEWAY_MAX) {
+            json_decref(leeway);
+            return "got invalid leeway";
+        }
+
+        field->nbf = leeway_value;
+        json_decref(leeway);
         return NGX_CONF_OK;
     }
 
@@ -259,7 +253,7 @@ static char *ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void
         return "got invalid claim name";
     }
 
-    if (value[2].len <= 1 || value[2].len >= NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX) {
+    if (value[2].len == 0 || value[2].len >= NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX) {
         return "got invalid claim value";
     }
 
@@ -311,7 +305,7 @@ static char *ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void 
         return "got invalid header name";
     }
 
-    if (nelts == 3 && ngx_strcmp(value[3].data, "optional") != 0) {
+    if (nelts == 4 && ngx_strcmp(value[3].data, "optional") != 0) {
         return "expected third argument to be 'optional'";
     }
 
@@ -358,7 +352,7 @@ static char *ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void 
 
     claim->claim_name = value[1];
     claim->header_name = value[2];
-    claim->optional = nelts == 3 ? 1 : 0;
+    claim->optional = nelts == 4 ? 1 : 0;
 
     ngx_queue_insert_tail(&field->claims, &claim->queue);
 
@@ -565,18 +559,12 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
 
     // Use custom exp / nbf check in callback for clearer responsibility boundary and better performance (use nginx cached time).
 
-    if (jwt_checker_time_leeway(checker, JWT_CLAIM_EXP, -1) != 0) {
+    if (jwt_checker_time_leeway(checker, JWT_CLAIM_EXP, -1) != 0
+     || jwt_checker_time_leeway(checker, JWT_CLAIM_NBF, -1) != 0) {
         ngx_http_jwt_request_free(r, &transaction);
         ngx_pfree(r->pool, token);
         jwt_checker_free(checker);
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: could not set exp leeway");
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    if (jwt_checker_time_leeway(checker, JWT_CLAIM_NBF, -1) != 0) {
-        ngx_http_jwt_request_free(r, &transaction);
-        ngx_pfree(r->pool, token);
-        jwt_checker_free(checker);
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: could not set nbf leeway");
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: could not disable JWT leeway");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -613,7 +601,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
     ngx_http_jwt_request_transaction_t *transaction;
     ngx_http_jwt_loc_conf_t            *jwt_lcf;
     ngx_queue_t *q;
-    static const ngx_str_t null_string = ngx_null_string;
 
     ctx = config->ctx;
     r = ctx->r;
@@ -695,12 +682,12 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
             json_decref(token_body);
             return -1;
         }
-        if (!json_is_integer(value)) {
+        if (!json_is_number(value)) {
             ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: exp is not an integer");
             json_decref(token_body);
             return -1;
         }
-        if (json_integer_value(value) <= (ngx_time() - jwt_lcf->validate.exp)) {
+        if (json_number_value(value) <= (ngx_time() - jwt_lcf->validate.exp)) {
             ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: exp expired");
             json_decref(token_body);
             return -1;
@@ -714,12 +701,12 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
             json_decref(token_body);
             return -1;
         }
-        if (!json_is_integer(value)) {
+        if (!json_is_number(value)) {
             ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: nbf is not an integer");
             json_decref(token_body);
             return -1;
         }
-        if (json_integer_value(value) > (ngx_time() + jwt_lcf->validate.nbf)) {
+        if (json_number_value(value) > (ngx_time() + jwt_lcf->validate.nbf)) {
             ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: nbf expired");
             json_decref(token_body);
             return -1;

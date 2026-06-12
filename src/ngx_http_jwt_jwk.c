@@ -7,8 +7,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
-#include <ngx_http_jwt_jwk.h>
-#include <ngx_http_jwt_memory.h>
+#include <ngx_http_jwt.h>
 #include <jwt.h>
 
 
