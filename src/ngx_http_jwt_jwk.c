@@ -56,44 +56,55 @@ ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *new_cycle) {
     return NGX_OK;
 }
 
-jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(u_char* path) {
+jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(ngx_str_t *path) {
     if (cycle == NULL) {
         return NULL;
     }
 
+    ngx_str_t *full_path;
     ngx_http_jwt_jwk_jwks_node_t *node;
     jwk_set_t *jwks;
     ngx_int_t index;
-    
-    index = ngx_http_jwt_jwk_string_hash(path);
+
+    full_path = path;
+
+    if (ngx_get_full_name(cycle->pool, &cycle->prefix, full_path) != NGX_OK) {
+        return NULL;
+    }
+
+    index = ngx_http_jwt_jwk_string_hash(full_path->data);
     node = jwks_table.nodes[index];
 
     while (node != NULL) {
-        if (ngx_strcmp(node->path, (char *) path) == 0) {
+        if (ngx_strcmp(node->path, full_path->data) == 0) {
+            ngx_pfree(cycle->pool, full_path->data);
             return node->jwks;
         }
         node = node->next;
     }
-    
-    jwks = jwks_create_fromfile((char *) path);
+
+    jwks = jwks_create_fromfile((char *) full_path->data);
     if (jwks == NULL) {
         // JWKS not found is a rejection. The handling relies on upper layer.
+        ngx_pfree(cycle->pool, full_path->data);
         return NULL;
     }
 
-    node = ngx_calloc(sizeof(ngx_http_jwt_jwk_jwks_node_t), cycle->log);
+    node = ngx_pcalloc(cycle->pool, sizeof(ngx_http_jwt_jwk_jwks_node_t));
     if (node == NULL) {
+        ngx_pfree(cycle->pool, full_path->data);
         jwks_free(jwks);
         return NULL;
     }
-    node->path = ngx_pnalloc(cycle->pool, strlen((char *) path) + 1);
+    node->path = ngx_palloc(cycle->pool, full_path->len + 1);
     if (node->path == NULL) {
+        ngx_pfree(cycle->pool, full_path->data);
         jwks_free(jwks);
-        ngx_http_jwt_memory_free(node);
+        ngx_pfree(cycle->pool, node);
         return NULL;
     }
-    ngx_memcpy(node->path, (char *) path, strlen((char *) path));
-    node->path[strlen((char *) path)] = '\0';
+    ngx_memcpy(node->path, full_path->data, full_path->len);
+    node->path[full_path->len] = '\0';
     node->jwks = jwks;
 
     node->next = jwks_table.nodes[index];

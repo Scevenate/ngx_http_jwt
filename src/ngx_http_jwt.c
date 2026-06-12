@@ -36,6 +36,7 @@ typedef struct {
 typedef struct {
     ngx_str_t claim_name;
     ngx_str_t header_name;
+    ngx_flag_t optional;
     ngx_queue_t queue;
 } ngx_http_jwt_extract_claim_t;
 
@@ -106,7 +107,7 @@ static ngx_command_t  ngx_http_jwt_commands[] = {
       NULL },
 
   { ngx_string("jwt_extract"),
-      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE2,
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE23,
       ngx_conf_set_extract_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_jwt_loc_conf_t, extract),
@@ -157,8 +158,7 @@ static ngx_int_t ngx_http_jwt_preconfiguration(ngx_conf_t *cf) {
     return NGX_OK;
 }
 
-static char *
-ngx_conf_set_default_jwks_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+static char *ngx_conf_set_default_jwks_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     char *p = conf;
 
     jwk_set_t **field;
@@ -176,7 +176,7 @@ ngx_conf_set_default_jwks_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     switch (value[1].data[0]) {
         case 'f':
             if (ngx_strcmp(value[1].data, "file") != 0) return "got invalid JWKS source";
-            *field = ngx_http_jwt_jwk_load_jwks_from_file(value[2].data);
+            *field = ngx_http_jwt_jwk_load_jwks_from_file(&value[2]);
             if (*field == NULL) return "failed to load JWKS from file";
             break;
         default:
@@ -192,8 +192,7 @@ ngx_conf_set_default_jwks_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     return NGX_CONF_OK;
 }
 
-static char *
-ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+static char *ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     char* p = conf;
 
     ngx_http_jwt_validate_t *field;
@@ -292,16 +291,16 @@ ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     return NGX_CONF_OK;
 }
 
-static char *
-ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+static char *ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     char* p = conf;
 
     ngx_http_jwt_extract_t *field;
+    ngx_int_t nelts;
     ngx_str_t *value;
     ngx_conf_post_t *post;
 
     field = (ngx_http_jwt_extract_t *) (p + cmd->offset);
-
+    nelts = cf->args->nelts;
     value = cf->args->elts;
 
     if (value[1].len == 0 || value[1].len >= NGX_HTTP_JWT_CLAIM_NAME_LEN_MAX) {
@@ -310,6 +309,10 @@ ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 
     if (value[2].len == 0 || value[2].len >= NGX_HTTP_JWT_HEADER_NAME_LEN_MAX) {
         return "got invalid header name";
+    }
+
+    if (nelts == 3 && ngx_strcmp(value[3].data, "optional") != 0) {
+        return "expected third argument to be 'optional'";
     }
 
     ngx_queue_t *q;
@@ -355,6 +358,7 @@ ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
 
     claim->claim_name = value[1];
     claim->header_name = value[2];
+    claim->optional = nelts == 3 ? 1 : 0;
 
     ngx_queue_insert_tail(&field->claims, &claim->queue);
 
@@ -366,8 +370,7 @@ ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     return NGX_CONF_OK;
 }
 
-static char *
-ngx_conf_check_error_code_slot(ngx_conf_t *cf, void *post, void *np) {
+static char *ngx_conf_check_error_code_slot(ngx_conf_t *cf, void *post, void *np) {
     ngx_int_t *error_code = np;
 
     if (*error_code < 300 || *error_code > 599) {
@@ -377,8 +380,7 @@ ngx_conf_check_error_code_slot(ngx_conf_t *cf, void *post, void *np) {
     return NGX_CONF_OK;
 }
 
-static void *
-ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
+static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
     ngx_http_jwt_loc_conf_t *conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_jwt_loc_conf_t));
     if (conf == NULL) {
         return NULL;
@@ -604,8 +606,7 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
     return NGX_DECLINED;
 }
 
-static int
-ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) {
+static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) {
     ngx_http_jwt_request_handler_checker_callback_ctx_t         *ctx;
     ngx_http_request_t                 *r;
     ngx_flag_t *internal_server_error;
@@ -773,7 +774,10 @@ ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) 
 
         if (value == NULL) {
             ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: extract claim not found");
-            if (ngx_http_jwt_request_set_header(r, transaction, extract_claim->header_name, null_string) != NGX_OK) {
+            if (!(extract_claim->optional)) {
+                json_decref(token_body);
+                return -1;
+            } else if (ngx_http_jwt_request_set_header(r, transaction, extract_claim->header_name, null_string) != NGX_OK) {
                 json_decref(token_body);
                 *internal_server_error = 1;
                 return -1;
