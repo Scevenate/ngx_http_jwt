@@ -6,6 +6,6 @@ dependencies = []
 
 [dependency-groups]
 dev = [
-    "pyjwt>=2.13.0",
+    "pyjwt[crypto]>=2.13.0",
     "requests>=2.34.2",
 ]

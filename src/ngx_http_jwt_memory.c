@@ -18,7 +18,10 @@ ngx_int_t ngx_http_jwt_memory_set_pool(ngx_pool_t *new_pool) {
     pool = new_pool;
 
     // This function also sets the memory allocator for jansson. This behaviour is documented in jwt.h.
-    jwt_set_alloc(ngx_http_jwt_memory_alloc, ngx_http_jwt_memory_free);
+    if (jwt_set_alloc(ngx_http_jwt_memory_alloc, ngx_http_jwt_memory_free) != 0) {
+        ngx_log_error(NGX_LOG_ERR, pool->log, 0, "JWT: failed to set memory allocator for JWT");
+        return NGX_ERROR;
+    }
 
     return NGX_OK;
 }

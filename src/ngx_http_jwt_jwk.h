@@ -13,6 +13,7 @@
 
 #include <ngx_config.h>
 #include <ngx_core.h>
+#include <ngx_http.h>
 #include <jwt.h>
 
 #define NGX_HTTP_JWT_JWKS_TABLE_SIZE 512

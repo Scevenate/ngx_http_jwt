@@ -11,6 +11,30 @@
 #include <jansson.h>
 #include <jwt.h>
 
+
+typedef struct {
+    ngx_str_t name;
+    json_t *value;
+    ngx_queue_t queue;
+} ngx_http_jwt_validate_claim_t;
+
+typedef struct {
+    double exp;
+    double nbf;
+    ngx_queue_t claims;
+} ngx_http_jwt_validate_t;
+
+typedef struct {
+    ngx_str_t claim_name;
+    ngx_str_t header_name;
+    ngx_flag_t optional;
+    ngx_queue_t queue;
+} ngx_http_jwt_extract_claim_t;
+
+typedef struct {
+    ngx_queue_t claims;
+} ngx_http_jwt_extract_t;
+
 typedef struct {
     ngx_flag_t enable;
     ngx_flag_t filter;
@@ -601,6 +625,7 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
     ngx_http_jwt_request_transaction_t *transaction;
     ngx_http_jwt_loc_conf_t            *jwt_lcf;
     ngx_queue_t *q;
+    static const ngx_str_t null_string = ngx_null_string;
 
     ctx = config->ctx;
     r = ctx->r;
@@ -636,7 +661,13 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
 
     config->alg = jwt_get_alg(jwt);
 
-    if (config->alg == JWT_ALG_NONE || jwks_item_alg(key) != config->alg) {
+    if (config->alg == JWT_ALG_NONE) {
+        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: alg not found");
+        return -1;
+    }
+
+    // The JWK can omit alg
+    if (jwks_item_alg(key) != JWT_ALG_NONE && jwks_item_alg(key) != config->alg) {
         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: key alg mismatch");
         return -1;
     }

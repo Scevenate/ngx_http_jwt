@@ -81,6 +81,7 @@ ngx_int_t ngx_http_jwt_request_apply(ngx_http_request_t *r, ngx_http_jwt_request
     ngx_http_jwt_request_filter_header *entry;
     
     static const ngx_str_t authorization = ngx_string("Authorization");
+    static const ngx_str_t null_string = ngx_null_string;
 
     if (transaction->filter_authorization) {
         r->headers_in.authorization = NULL;

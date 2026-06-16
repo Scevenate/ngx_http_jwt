@@ -9,7 +9,7 @@ from threading import Thread
 
 NGINX_PORT = 8080
 NGINX_PROXY_PORT = 8081
-NGINX_START_WAIT_TIME = 0.1 # Increase this time if connection refused
+NGINX_START_WAIT_TIME = 0.1 # Try increasing this time if connection refused
 
 class NginxTestCase(TestCase):
     test_file = __file__

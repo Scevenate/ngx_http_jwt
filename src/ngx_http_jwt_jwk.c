@@ -23,7 +23,7 @@ typedef struct {
     ngx_http_jwt_jwk_jwks_node_t *nodes[NGX_HTTP_JWT_JWKS_TABLE_SIZE];
 } ngx_http_jwt_jwk_jwks_table_t;
 
-static ngx_http_jwt_jwk_jwks_table_t jwks_table = { .nodes = { NULL } };
+static ngx_http_jwt_jwk_jwks_table_t *jwks_table = NULL;
 static ngx_cycle_t *cycle = NULL;
 
 static inline ngx_int_t ngx_http_jwt_jwk_string_hash(u_char* str) {
@@ -32,23 +32,13 @@ static inline ngx_int_t ngx_http_jwt_jwk_string_hash(u_char* str) {
 
 
 ngx_int_t ngx_http_jwt_jwk_cycle_init(ngx_cycle_t *new_cycle) {
-    // Free previous cycle
-    if (cycle != NULL) {
-        ngx_http_jwt_jwk_jwks_node_t *node, *next;
-
-        for (ngx_uint_t i = 0; i < NGX_HTTP_JWT_JWKS_TABLE_SIZE; i++) {
-            node = jwks_table.nodes[i];
-            while (node != NULL) {
-                next = node->next;
-                ngx_http_jwt_memory_free(node->path);
-                jwks_free(node->jwks);
-                ngx_http_jwt_memory_free(node);
-                node = next;
-            }
-            jwks_table.nodes[i] = NULL;
-        }
-    }
+    // Since all memory related is allocated in previous cycle, we don't need to free anything.
     cycle = new_cycle;
+
+    jwks_table = ngx_pcalloc(cycle->pool, sizeof(ngx_http_jwt_jwk_jwks_table_t));
+    if (jwks_table == NULL) {
+        return NGX_ERROR;
+    }
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, cycle->log, 0, "JWK: cycle initialized");
 
@@ -72,7 +62,7 @@ jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(ngx_str_t *path) {
     }
 
     index = ngx_http_jwt_jwk_string_hash(full_path->data);
-    node = jwks_table.nodes[index];
+    node = jwks_table->nodes[index];
 
     while (node != NULL) {
         if (ngx_strcmp(node->path, full_path->data) == 0) {
@@ -106,7 +96,9 @@ jwk_set_t *ngx_http_jwt_jwk_load_jwks_from_file(ngx_str_t *path) {
     node->path[full_path->len] = '\0';
     node->jwks = jwks;
 
-    node->next = jwks_table.nodes[index];
-    jwks_table.nodes[index] = node;
+    node->next = jwks_table->nodes[index];
+    jwks_table->nodes[index] = node;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, cycle->log, 0, "JWK: loaded JWKS from file");
     return node->jwks;
 }
