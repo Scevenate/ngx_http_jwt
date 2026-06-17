@@ -347,7 +347,6 @@ static char *ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void 
     }
 
     ngx_uint_t i;
-    ngx_http_header_t  *header;
 
     for (i = 0; i < value[2].len; i++) {
         if ((value[2].data[i] >= '0' && value[2].data[i] <= '9')
@@ -359,14 +358,6 @@ static char *ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void 
             continue;
         }
         return "got invalid header name";
-    }
-
-    for (header = ngx_http_headers_in; header->name.len; header++) {
-        if (value[2].len == header->name.len
-            && ngx_strncasecmp(value[2].data, header->name.data, value[2].len) == 0)
-        {
-            return "got collision-prone header name";
-        }
     }
 
     claim = ngx_palloc(cf->pool, sizeof(ngx_http_jwt_extract_claim_t));
@@ -526,11 +517,13 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
 
     ngx_http_jwt_loc_conf_t            *jwt_lcf;
     ngx_http_jwt_request_handler_checker_callback_ctx_t          ctx;
-    ngx_http_jwt_request_transaction_t  transaction;
+    ngx_http_jwt_request_transaction_t *transaction;
     ngx_table_elt_t                    *authorization;
     ngx_int_t                           len;
     char                               *token;
     jwt_checker_t                      *checker;
+    static const ngx_str_t authorization_string = ngx_string("Authorization");
+    static const ngx_str_t null_string = ngx_null_string;
 
     jwt_lcf = r->loc_conf[ngx_http_jwt_module.ctx_index];
 
@@ -538,7 +531,12 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
         return NGX_DECLINED;
     }
 
-    // Fetch token
+    transaction = ngx_http_jwt_request_init(r);
+    if (transaction == NULL) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    // Fetch & filter token
 
     authorization = r->headers_in.authorization;
     if (authorization == NULL
@@ -547,6 +545,7 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
                         sizeof("Bearer ") - 1) != 0)
     {
         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT: invalid authorization header");
+        ngx_http_jwt_request_free(transaction);
         return jwt_lcf->error_code;
     }
 
@@ -556,50 +555,53 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
 
     token = ngx_palloc(r->pool, len + 1);
     if (token == NULL) {
+        ngx_http_jwt_request_free(transaction);
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
     ngx_memcpy(token, authorization->value.data + (sizeof("Bearer ") - 1), len);
     token[len] = '\0';
 
-    // Initialize callback ctx & ctx.transaction
+    if (jwt_lcf->filter == 1) {
+        if (ngx_http_jwt_request_set_header(transaction, authorization_string, null_string) != NGX_OK) {
+            ngx_http_jwt_request_free(transaction);
+            ngx_pfree(r->pool, token);
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+    }
+
+    // Checker & callback
     
     ctx.r = r;
-    if (ngx_http_jwt_request_init(&transaction) != NGX_OK) {
-        ngx_pfree(r->pool, token);
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    ctx.transaction = &transaction;
+    ctx.transaction = transaction;
     ctx.internal_server_error = 0;
-
-    // Checker
 
     checker = jwt_checker_new();
     if (checker == NULL) {
-        ngx_http_jwt_request_free(r, &transaction);
+        ngx_http_jwt_request_free(transaction);
         ngx_pfree(r->pool, token);
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: could not create checker");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    // Use custom exp / nbf check in callback for clearer responsibility boundary and better performance (use nginx cached time).
-
+    // By default, the checker checks exp / nbf claims. Disabling it here.
+    // We'll use custom exp / nbf check in callback for clearer validation responsibility boundary and better performance (use nginx cached time).
     if (jwt_checker_time_leeway(checker, JWT_CLAIM_EXP, -1) != 0
      || jwt_checker_time_leeway(checker, JWT_CLAIM_NBF, -1) != 0) {
-        ngx_http_jwt_request_free(r, &transaction);
+        ngx_http_jwt_request_free(transaction);
         ngx_pfree(r->pool, token);
         jwt_checker_free(checker);
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: could not disable JWT leeway");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    // Callback
-
     jwt_checker_setcb(checker, ngx_http_jwt_request_handler_checker_callback,
                       &ctx);
 
+    // Verify
+
     if (jwt_checker_verify(checker, token) != 0) {
         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT: authorization failed");
-        ngx_http_jwt_request_free(r, &transaction);
+        ngx_http_jwt_request_free(transaction);
         ngx_pfree(r->pool, token);
         jwt_checker_free(checker);
         return ctx.internal_server_error ? NGX_HTTP_INTERNAL_SERVER_ERROR : jwt_lcf->error_code;
@@ -610,7 +612,7 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
 
     // Apply transaction
 
-    if (ngx_http_jwt_request_apply(r, &transaction) != NGX_OK) {
+    if (ngx_http_jwt_request_apply(transaction) != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -744,16 +746,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
         }
     }
 
-    // Set authorization
-
-    if (jwt_lcf->filter == 1) {
-        if (ngx_http_jwt_request_set_authorization(transaction) != NGX_OK) {
-            json_decref(token_body);
-            *internal_server_error = 1;
-            return -1;
-        }
-    }
-
     // Validate value claims
 
     ngx_http_jwt_validate_claim_t *validate_claim;
@@ -795,7 +787,7 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
             if (!(extract_claim->optional)) {
                 json_decref(token_body);
                 return -1;
-            } else if (ngx_http_jwt_request_set_header(r, transaction, extract_claim->header_name, null_string) != NGX_OK) {
+            } else if (ngx_http_jwt_request_set_header(transaction, extract_claim->header_name, null_string) != NGX_OK) {
                 json_decref(token_body);
                 *internal_server_error = 1;
                 return -1;
@@ -807,7 +799,7 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
 
         if (raw.data == NULL) {
             ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT authorization: Extract claim value");
-            ngx_http_jwt_request_set_header(r, transaction, extract_claim->header_name, null_string); // Double fail. Doesn't care, just pass to fast finalization.
+            ngx_http_jwt_request_set_header(transaction, extract_claim->header_name, null_string); // Double fail. Doesn't care, just pass to fast finalization.
             json_decref(token_body);
             *internal_server_error = 1;
             return -1;
@@ -815,7 +807,7 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
 
         if (ngx_strlen(raw.data) >= NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX) {
             ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: Claim value too long");
-            if (ngx_http_jwt_request_set_header(r, transaction, extract_claim->header_name, null_string) != NGX_OK) {
+            if (ngx_http_jwt_request_set_header(transaction, extract_claim->header_name, null_string) != NGX_OK) {
                 json_decref(token_body);
                 ngx_http_jwt_memory_free(raw.data);
                 *internal_server_error = 1;
@@ -837,7 +829,7 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
 
         ngx_encode_base64url(&encoded, &raw);
 
-        if (ngx_http_jwt_request_set_header(r, transaction, extract_claim->header_name, encoded) != NGX_OK) {
+        if (ngx_http_jwt_request_set_header(transaction, extract_claim->header_name, encoded) != NGX_OK) {
             ngx_pfree(r->pool, encoded.data);
             json_decref(token_body);
             ngx_http_jwt_memory_free(raw.data);

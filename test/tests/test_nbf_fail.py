@@ -9,8 +9,8 @@ class TestNbfFail(NginxTestCase):
     def test_nbf_fail(self):
         with Session() as session:
             jwt_token = jwt.encode(
-                {"exp": int(time.time()) - 5,
-                "nbf": int(time.time()) + 10,
+                {"exp": time.time() - 5,
+                "nbf": time.time() + 10,
                 "food": "bar"},
                 "test_secret_key_32_bytes_long!!!",
                 "HS256",

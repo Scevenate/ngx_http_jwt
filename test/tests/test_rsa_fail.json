@@ -1,0 +1,11 @@
+{
+    "keys": [
+        {
+            "kty": "RSA",
+            "alg": "RS256",
+            "n": "BiiiiigModulusBase64Thing",
+            "e": "AQAB",
+            "kid": "rsa_key"
+        }
+    ]
+}

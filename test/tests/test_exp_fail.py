@@ -9,8 +9,8 @@ class TestExpFail(NginxTestCase):
     def test_exp_fail(self):
         with Session() as session:
             jwt_token = jwt.encode(
-                {"exp": int(time.time()) - 10,
-                "nbf": int(time.time()) - 5,
+                {"exp": time.time() - 10,
+                "nbf": time.time() - 5,
                 "food": "bar"},
                 "test_secret_key_32_bytes_long!!!",
                 "HS256",

@@ -12,6 +12,11 @@ NGINX_PROXY_PORT = 8081
 NGINX_START_WAIT_TIME = 0.1 # Try increasing this time if connection refused
 
 class NginxTestCase(TestCase):
+    """
+    Base testcase class for all nginx test cases.
+    Manages nginx lifecycle, tests configuration and enables debug logging.
+    All testcases must start with: test_file = __file__
+    """
     test_file = __file__
 
     def setUp(self):
@@ -28,7 +33,7 @@ class NginxTestCase(TestCase):
             text=True,
         )
         if nginx_test.returncode != 0:
-            raise RuntimeError(f"Configuration file {self.conf_path} test failed:\n{nginx_test.stderr}")
+            raise AssertionError(f"Configuration file {self.conf_path} test failed:\n{nginx_test.stderr}")
 
         # Over 150k tokens have been wasted on this daemon directive.
         self.nginx_process = subprocess.Popen([self.nginx_path, "-p", self.nginx_prefix, "-c", self.conf_path, "-g", f"daemon off; error_log logs/error.log debug;"])
@@ -42,6 +47,13 @@ class NginxTestCase(TestCase):
 
 
 class NginxProxyTestCase(NginxTestCase):
+    """
+    Testcase class for proxy testcases.
+    This subclass provides a proxy backend http://localhost:8081 with header extraction functionality.
+    The headers of the last proxied request are available in the self.proxied_headers attribute.
+    This class also provides a b64url_decode_json method to decode base64url encoded JSON strings.
+    All testcases must start with: test_file = __file__
+    """
     def setUp(self):
         super().setUp()
         self.proxied_headers = {}
@@ -59,7 +71,7 @@ class NginxProxyTestCase(NginxTestCase):
         super().tearDown()
 
     @staticmethod
-    def _headerEchoHandlerFactoryFactory(captured):
+    def _headerEchoHandlerFactoryFactory(captured): # Surprise!!!
         def _headerEchoHandlerFactory(*args, **kwargs):
             class HeaderEchoHandler(BaseHTTPRequestHandler):
                 def do_GET(self):
@@ -75,7 +87,7 @@ class NginxProxyTestCase(NginxTestCase):
             return HeaderEchoHandler(*args, **kwargs)
         return _headerEchoHandlerFactory
 
-    # Actually only proxy testcase uses this. So we're gatekeeping NginxTestCase as a basic nginx lifespan manager.
+    # Actually only proxy testcase uses this. So we're gatekeeping NginxTestCase as a basic nginx lifecycle manager.
     @staticmethod
     def b64url_decode_json(value):
         padding = "=" * (-len(value) % 4)

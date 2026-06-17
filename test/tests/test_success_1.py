@@ -8,11 +8,10 @@ class TestSuccess1(NginxProxyTestCase):
     test_file = __file__
 
     def test_success_1(self):
-        now = int(time.time())
         jwt_token = jwt.encode(
             {
-                "exp": now + 3600,
-                "nbf": now - 1,
+                "exp": time.time() + 3600,
+                "nbf": time.time() - 1,
                 "banner_name": "承诺",
                 "api_version": 0,
                 "game_version": 1.41,
