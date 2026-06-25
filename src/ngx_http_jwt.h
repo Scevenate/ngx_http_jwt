@@ -10,8 +10,8 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
-#include <ngx_http_jwt_request.h>
-#include <ngx_http_jwt_jwk.h>
+#include <ngx_http_jwt_request_transaction.h>
+#include <ngx_http_jwt_jwks_storage.h>
 #include <ngx_http_jwt_memory.h>
 
 
@@ -22,6 +22,9 @@
 #define NGX_HTTP_JWT_CLAIM_NAME_LEN_MAX 2048 // Include null terminator
 #define NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX 2048 // Include null terminator
 #define NGX_HTTP_JWT_HEADER_NAME_LEN_MAX 2048 // Include null terminator
+
+
+extern ngx_module_t ngx_http_jwt_module;
 
 
 #endif /* NGX_HTTP_JWT_H */

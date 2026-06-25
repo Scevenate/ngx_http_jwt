@@ -7,7 +7,7 @@
 
 ## Overview
 
-This module is an static add-on module compiled into nginx. It enables nginx to verify a JWT, validate its claims and extract claims to proxied request if you still need any. Common use case would be like verifying session token or OAuth / OIDC [access token](https://datatracker.ietf.org/doc/html/rfc6749#autoid-9).
+This module is an static add-on module compiled into nginx. It enables nginx to verify a JWT, validate its claims and extract claims to proxied request if you still need any. Common use case would be like verifying session token or OAuth / OIDC [access token](https://datatracker.ietf.org/doc/html/rfc9068).
 
 This module is still under construction. The main branch is maintained as a functional version, but no interface commitment is promised.
 

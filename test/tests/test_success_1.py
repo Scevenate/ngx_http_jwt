@@ -40,7 +40,6 @@ class TestSuccess1(NginxProxyTestCase):
 
         headers = self.proxied_headers
         assert headers
-        assert "authorization" not in headers
         assert "admin" not in headers
         assert self.b64url_decode_json(headers["banner_name"]) == "承诺"
         assert self.b64url_decode_json(headers["pulls"]) == 10

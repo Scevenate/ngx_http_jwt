@@ -10,25 +10,35 @@
 #include <ngx_http_jwt.h>
 
 
-ngx_http_jwt_request_transaction_t *ngx_http_jwt_request_init(ngx_http_request_t *r) {
+typedef struct {
+    ngx_str_t name;
+    ngx_str_t value;
+    ngx_queue_t queue;
+} ngx_http_jwt_request_action_t;
+
+struct ngx_http_jwt_request_transaction_s {
+    ngx_http_request_t *r;
+    ngx_queue_t actions; // of ngx_http_jwt_request_action_t
+};
+
+
+ngx_http_jwt_request_transaction_t *ngx_http_jwt_request_transaction_init(ngx_http_request_t *r) {
     ngx_http_jwt_request_transaction_t *transaction = ngx_palloc(r->pool, sizeof(ngx_http_jwt_request_transaction_t));
-    if (transaction == NULL) {
-        return NULL;
-    }
+    if (transaction == NULL) return NULL;
     transaction->r = r;
-    ngx_queue_init(&transaction->filter);
+    ngx_queue_init(&transaction->actions);
     return transaction;
 }
 
-void ngx_http_jwt_request_free(ngx_http_jwt_request_transaction_t *transaction) {
+void ngx_http_jwt_request_transaction_free(ngx_http_jwt_request_transaction_t *transaction) {
     ngx_queue_t *q, *next;
-    ngx_http_jwt_request_header_t *entry;
+    ngx_http_jwt_request_action_t *entry;
 
-    for (q = ngx_queue_head(&transaction->filter);
-         q != ngx_queue_sentinel(&transaction->filter);
+    for (q = ngx_queue_head(&transaction->actions);
+         q != ngx_queue_sentinel(&transaction->actions);
          q = next) {
         next = ngx_queue_next(q);
-        entry = ngx_queue_data(q, ngx_http_jwt_request_header_t, queue);
+        entry = ngx_queue_data(q, ngx_http_jwt_request_action_t, queue);
         ngx_pfree(transaction->r->pool, entry->name.data);
         ngx_pfree(transaction->r->pool, entry->value.data);
         ngx_pfree(transaction->r->pool, entry);
@@ -37,10 +47,10 @@ void ngx_http_jwt_request_free(ngx_http_jwt_request_transaction_t *transaction) 
     ngx_pfree(transaction->r->pool, transaction);
 }
 
-ngx_int_t ngx_http_jwt_request_set_header(ngx_http_jwt_request_transaction_t *transaction, ngx_str_t name, ngx_str_t value) {
-    ngx_http_jwt_request_header_t *entry;
+ngx_int_t ngx_http_jwt_request_transaction_add_action(ngx_http_jwt_request_transaction_t *transaction, ngx_str_t name, ngx_str_t value) {
+    ngx_http_jwt_request_action_t *entry;
 
-    entry = ngx_palloc(transaction->r->pool, sizeof(ngx_http_jwt_request_header_t));
+    entry = ngx_palloc(transaction->r->pool, sizeof(ngx_http_jwt_request_action_t));
     if (entry == NULL) {
         return NGX_ERROR;
     }
@@ -69,24 +79,24 @@ ngx_int_t ngx_http_jwt_request_set_header(ngx_http_jwt_request_transaction_t *tr
         entry->value.data[value.len] = '\0';
     }
 
-    ngx_queue_insert_tail(&transaction->filter, &entry->queue);
+    ngx_queue_insert_tail(&transaction->actions, &entry->queue);
 
     return NGX_OK;
 }
 
-ngx_int_t ngx_http_jwt_request_apply(ngx_http_jwt_request_transaction_t *transaction) {
+ngx_int_t ngx_http_jwt_request_transaction_apply(ngx_http_jwt_request_transaction_t *transaction) {
     ngx_queue_t *q, *next;
-    ngx_http_jwt_request_header_t *entry;
+    ngx_http_jwt_request_action_t *entry;
     ngx_uint_t i;
     ngx_list_part_t *part;
     ngx_table_elt_t *h, **hr;
     ngx_http_header_t *hh;
     ngx_uint_t hash;
 
-    for (q = ngx_queue_head(&transaction->filter);
-         q != ngx_queue_sentinel(&transaction->filter);
+    for (q = ngx_queue_head(&transaction->actions);
+         q != ngx_queue_sentinel(&transaction->actions);
          q = ngx_queue_next(q)) {
-        entry = ngx_queue_data(q, ngx_http_jwt_request_header_t, queue);
+        entry = ngx_queue_data(q, ngx_http_jwt_request_action_t, queue);
         part = &transaction->r->headers_in.headers.part;
         h = part->elts;
 
@@ -165,14 +175,15 @@ ngx_int_t ngx_http_jwt_request_apply(ngx_http_jwt_request_transaction_t *transac
     }
 
     // Free transaction
-    for (q = ngx_queue_head(&transaction->filter);
-         q != ngx_queue_sentinel(&transaction->filter);
+    for (q = ngx_queue_head(&transaction->actions);
+         q != ngx_queue_sentinel(&transaction->actions);
          q = next) {
+        entry = ngx_queue_data(q, ngx_http_jwt_request_action_t, queue);
         next = ngx_queue_next(q);
-        entry = ngx_queue_data(q, ngx_http_jwt_request_header_t, queue);
+        // The ownership of entry name / value are transferred.
         ngx_pfree(transaction->r->pool, entry);
     }
-    ngx_http_jwt_request_free(transaction);
+    ngx_pfree(transaction->r->pool, transaction);
 
     return NGX_OK;
 }

@@ -1,0 +1,10 @@
+{
+    "keys": [
+        {
+            "kty": "oct",
+            "alg": "HS256",
+            "k": "HS256_KEY_VALUE_1_VERY_LONG_VALUE_AT_LEAST_32_BYTES_LONG",
+            "kid": "1"
+        }
+    ]
+}

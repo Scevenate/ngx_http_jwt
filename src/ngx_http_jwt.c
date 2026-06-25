@@ -4,6 +4,7 @@
  */
 
 
+#include "ngx_conf_file.h"
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
@@ -11,6 +12,10 @@
 #include <jansson.h>
 #include <jwt.h>
 
+
+typedef struct {
+    ngx_http_jwt_jwks_storage_jwks_storage_t *jwks_storage;
+} ngx_http_jwt_main_conf_t;
 
 typedef struct {
     ngx_str_t name;
@@ -36,9 +41,13 @@ typedef struct {
 } ngx_http_jwt_extract_t;
 
 typedef struct {
+    ngx_http_jwt_jwks_storage_jwks_t *jwks;
+    ngx_queue_t queue;
+} ngx_http_jwt_loaded_jwks_t;
+
+typedef struct {
     ngx_flag_t enable;
-    ngx_flag_t filter;
-    jwk_set_t *default_jwks;
+    ngx_queue_t loaded_jwkss;
     ngx_http_jwt_validate_t validate;
     ngx_http_jwt_extract_t extract;
     ngx_int_t error_code;
@@ -52,7 +61,7 @@ typedef struct {
 
 static ngx_int_t ngx_http_jwt_preconfiguration(ngx_conf_t *cf);
 
-static char *ngx_conf_set_default_jwks_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_conf_set_load_jwks_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_conf_set_validate_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_conf_set_extract_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_conf_check_error_code_slot(ngx_conf_t *cf, void *post, void *np);
@@ -60,10 +69,15 @@ static ngx_conf_post_t ngx_conf_check_error_code_slot_post = {
     ngx_conf_check_error_code_slot
 };
 
+static void *ngx_http_jwt_create_main_conf(ngx_conf_t *cf);
+static char *ngx_http_jwt_init_main_conf(ngx_conf_t *cf, void *conf);
+
 static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *prev, void *conf);
 
 static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf);
+
+static ngx_int_t ngx_http_jwt_init_process(ngx_cycle_t *cycle);
 
 static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r);
 static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config);
@@ -75,19 +89,12 @@ static ngx_command_t  ngx_http_jwt_commands[] = {
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_jwt_loc_conf_t, enable),
       NULL },
-    
-  { ngx_string("jwt_filter"),
-      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
-      ngx_conf_set_flag_slot,
-      NGX_HTTP_LOC_CONF_OFFSET,
-      offsetof(ngx_http_jwt_loc_conf_t, filter),
-      NULL },
 
-  { ngx_string("jwt_default_jwks"),
+  { ngx_string("jwt_load_jwks"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE2,
-      ngx_conf_set_default_jwks_slot,
+      ngx_conf_set_load_jwks_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
-      offsetof(ngx_http_jwt_loc_conf_t, default_jwks),
+      offsetof(ngx_http_jwt_loc_conf_t, loaded_jwkss),
       NULL },
 
   { ngx_string("jwt_validate"),
@@ -118,8 +125,8 @@ static ngx_http_module_t  ngx_http_jwt_module_ctx = {
     ngx_http_jwt_preconfiguration,        /* preconfiguration */
     ngx_http_jwt_postconfiguration,       /* postconfiguration */
 
-    NULL,                                 /* create main configuration */
-    NULL,                                 /* init main configuration */
+    ngx_http_jwt_create_main_conf,       /* create main configuration */
+    ngx_http_jwt_init_main_conf,         /* init main configuration */
 
     NULL,                                 /* create server configuration */
     NULL,                                 /* merge server configuration */
@@ -135,7 +142,7 @@ ngx_module_t  ngx_http_jwt_module = {
     NGX_HTTP_MODULE,                       /* module type */
     NULL,                                  /* init master */
     NULL,                                  /* init module */
-    NULL,                                  /* init process */
+    ngx_http_jwt_init_process,            /* init process */
     NULL,                                  /* init thread */
     NULL,                                  /* exit thread */
     NULL,                                  /* exit process */
@@ -144,36 +151,77 @@ ngx_module_t  ngx_http_jwt_module = {
 };
 
 static ngx_int_t ngx_http_jwt_preconfiguration(ngx_conf_t *cf) {
-    if (ngx_http_jwt_memory_set_pool(cf->cycle->pool) != NGX_OK) return NGX_ERROR;
-    if (ngx_http_jwt_jwk_cycle_init(cf->cycle) != NGX_OK) return NGX_ERROR;
-    return NGX_OK;
+    ngx_http_jwt_memory_config_t config;
+    config.pool_type = NGX_HTTP_JWT_MEMORY_POOL_REGULAR;
+    config.pool = (ngx_pool_t *) cf->cycle->pool;
+    return ngx_http_jwt_memory_set(&config);
 }
 
-static char *ngx_conf_set_default_jwks_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
+static char *ngx_conf_set_load_jwks_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *conf) {
     char *p = conf;
 
-    jwk_set_t **field;
+    ngx_http_jwt_main_conf_t *jwt_mc = ngx_http_conf_get_module_main_conf(cf, ngx_http_jwt_module);
+    if (jwt_mc == NULL) {
+        return "failed to get main configuration";
+    }
+
+    ngx_queue_t *field;
+    ngx_http_jwt_jwks_storage_jwks_t *jwks;
     ngx_str_t *value;
     ngx_conf_post_t *post;
     
-    field = (jwk_set_t **) (p + cmd->offset);
-
-    if (*field != NGX_CONF_UNSET_PTR) {
-        return "is duplicate";
-    }
+    field = (ngx_queue_t *) (p + cmd->offset);
 
     value = cf->args->elts;
 
-    switch (value[1].data[0]) {
-        case 'f':
+    if (value[1].len < 3) return "got invalid JWKS source";
+
+    switch (value[1].data[3]) {
+        case 'i':
+            if (ngx_strcmp(value[1].data, "string") != 0) return "got invalid JWKS source";
+            jwks = ngx_http_jwt_jwks_storage_add_jwks(jwt_mc->jwks_storage, NGX_HTTP_JWT_JWKS_STORAGE_TYPE_STRING, value[2]);
+            if (jwks == NULL) return "failed to load JWKS from string";
+            break;
+        case 'e':
             if (ngx_strcmp(value[1].data, "file") != 0) return "got invalid JWKS source";
-            *field = ngx_http_jwt_jwk_load_jwks_from_file(&value[2]);
-            if (*field == NULL) return "failed to load JWKS from file";
+            jwks = ngx_http_jwt_jwks_storage_add_jwks(jwt_mc->jwks_storage, NGX_HTTP_JWT_JWKS_STORAGE_TYPE_FILE, value[2]);
+            if (jwks == NULL) return "failed to load JWKS from file";
+            break;
+        case 0:
+            if (ngx_strcmp(value[1].data, "url") != 0) return "got invalid JWKS source";
+            jwks = ngx_http_jwt_jwks_storage_add_jwks(jwt_mc->jwks_storage, NGX_HTTP_JWT_JWKS_STORAGE_TYPE_URL, value[2]);
+            if (jwks == NULL) return "failed to load JWKS from URL";
+            break;
+        case 't':
+            if (ngx_strcmp(value[1].data, "oauth") != 0) return "got invalid JWKS source";
+            jwks = ngx_http_jwt_jwks_storage_add_jwks(jwt_mc->jwks_storage, NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OAUTH, value[2]);
+            if (jwks == NULL) return "failed to load JWKS from OAuth";
+            break;
+        case 'c':
+            if (ngx_strcmp(value[1].data, "oidc") != 0) return "got invalid JWKS source";
+            jwks = ngx_http_jwt_jwks_storage_add_jwks(jwt_mc->jwks_storage, NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OIDC, value[2]);
+            if (jwks == NULL) return "failed to load JWKS from OIDC";
             break;
         default:
             return "got invalid JWKS source";
-            break;
     }
+
+    ngx_queue_t *q;
+    ngx_http_jwt_loaded_jwks_t *loaded_jwks;
+    for (q = ngx_queue_head(field);
+         q != ngx_queue_sentinel(field);
+         q = ngx_queue_next(q)) {
+        loaded_jwks = ngx_queue_data(q, ngx_http_jwt_loaded_jwks_t, queue);
+        if (loaded_jwks->jwks == jwks) {
+            return "is duplicate";
+        }
+    }
+
+    loaded_jwks = ngx_palloc(cf->pool, sizeof(ngx_http_jwt_loaded_jwks_t));
+    if (loaded_jwks == NULL) return NGX_CONF_ERROR;
+
+    loaded_jwks->jwks = jwks;
+    ngx_queue_insert_tail(field, &loaded_jwks->queue);
 
     if (cmd->post) {
         post = cmd->post;
@@ -389,6 +437,25 @@ static char *ngx_conf_check_error_code_slot(ngx_conf_t *cf, void *post, void *np
     return NGX_CONF_OK;
 }
 
+
+static void *ngx_http_jwt_create_main_conf(ngx_conf_t *cf) {
+    ngx_http_jwt_main_conf_t *conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_jwt_main_conf_t));
+    if (conf == NULL) {
+        return NULL;
+    }
+
+    conf->jwks_storage = ngx_http_jwt_jwks_storage_init(cf);
+    if (conf->jwks_storage == NULL) {
+        return NULL;
+    }
+
+    return conf;
+}
+
+static char *ngx_http_jwt_init_main_conf(ngx_conf_t *cf, void *conf) {
+    return NGX_CONF_OK;
+}
+
 static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
     ngx_http_jwt_loc_conf_t *conf = ngx_pcalloc(cf->pool, sizeof(ngx_http_jwt_loc_conf_t));
     if (conf == NULL) {
@@ -396,10 +463,9 @@ static void *ngx_http_jwt_create_loc_conf(ngx_conf_t *cf) {
     }
 
     conf->enable = NGX_CONF_UNSET;
-    conf->filter = NGX_CONF_UNSET;
-    conf->default_jwks = NGX_CONF_UNSET_PTR;
     conf->validate.exp = NGX_CONF_UNSET;
     conf->validate.nbf = NGX_CONF_UNSET;
+    ngx_queue_init(&conf->loaded_jwkss);
     ngx_queue_init(&conf->validate.claims);
     ngx_queue_init(&conf->extract.claims);
     conf->error_code = NGX_CONF_UNSET;
@@ -411,8 +477,6 @@ static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *chi
     ngx_http_jwt_loc_conf_t *conf = child;
 
     ngx_conf_merge_value(conf->enable, prev->enable, 0);
-    ngx_conf_merge_value(conf->filter, prev->filter, 1);
-    ngx_conf_merge_ptr_value(conf->default_jwks, prev->default_jwks, NGX_CONF_UNSET_PTR);
     ngx_conf_merge_value(conf->validate.exp, prev->validate.exp, NGX_CONF_UNSET);
     ngx_conf_merge_value(conf->validate.nbf, prev->validate.nbf, NGX_CONF_UNSET);
     ngx_conf_merge_value(conf->error_code, prev->error_code, NGX_HTTP_JWT_DEFAULT_ERROR_CODE);
@@ -422,6 +486,7 @@ static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *chi
     ngx_queue_t *q_prev, *q_conf;
     ngx_http_jwt_validate_claim_t *validate_claim_prev, *validate_claim_conf;
     ngx_http_jwt_extract_claim_t *extract_claim_prev, *extract_claim_conf;
+    ngx_http_jwt_loaded_jwks_t *loaded_jwks_prev, *loaded_jwks_conf;
     ngx_flag_t found;
 
     for (q_prev = ngx_queue_head(&prev->validate.claims);
@@ -492,11 +557,35 @@ static char *ngx_http_jwt_merge_loc_conf(ngx_conf_t *cf, void *parent, void *chi
             }
         }
     }
+
+
+    for (q_prev = ngx_queue_head(&prev->loaded_jwkss);
+         q_prev != ngx_queue_sentinel(&prev->loaded_jwkss);
+         q_prev = ngx_queue_next(q_prev)) {
+        loaded_jwks_prev = ngx_queue_data(q_prev, ngx_http_jwt_loaded_jwks_t, queue);
+        found = 0;
+        for (q_conf = ngx_queue_head(&conf->loaded_jwkss);
+             q_conf != ngx_queue_sentinel(&conf->loaded_jwkss);
+             q_conf = ngx_queue_next(q_conf)) {
+            loaded_jwks_conf = ngx_queue_data(q_conf, ngx_http_jwt_loaded_jwks_t, queue);
+            if (loaded_jwks_prev->jwks == loaded_jwks_conf->jwks) {
+                found = 1;
+                break;
+            }
+        }
+        if (found) continue;
+
+        loaded_jwks_conf = ngx_palloc(cf->pool, sizeof(ngx_http_jwt_loaded_jwks_t));
+        if (loaded_jwks_conf == NULL) return NGX_CONF_ERROR;
+
+        loaded_jwks_conf->jwks = loaded_jwks_prev->jwks;
+        ngx_queue_insert_tail(&conf->loaded_jwkss, &loaded_jwks_conf->queue);
+    }
+
     return NGX_CONF_OK;
 }
 
-static ngx_int_t
-ngx_http_jwt_postconfiguration(ngx_conf_t *cf) {
+static ngx_int_t ngx_http_jwt_postconfiguration(ngx_conf_t *cf) {
     ngx_http_handler_pt *handler;
     ngx_http_core_main_conf_t *cmcf;
     cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
@@ -511,9 +600,19 @@ ngx_http_jwt_postconfiguration(ngx_conf_t *cf) {
     return NGX_OK;
 }
 
-static ngx_int_t 
-ngx_http_jwt_request_handler(ngx_http_request_t *r) {
-    ngx_http_jwt_memory_set_pool(r->pool);
+static ngx_int_t ngx_http_jwt_init_process(ngx_cycle_t *cycle) {
+    ngx_http_jwt_main_conf_t *jwtmcf;
+    jwtmcf = (ngx_http_jwt_main_conf_t *) ngx_http_cycle_get_module_main_conf(cycle, ngx_http_jwt_module);
+    if (jwtmcf == NULL) return NGX_ERROR;
+
+    return ngx_http_jwt_jwks_storage_setup_timers(jwtmcf->jwks_storage);
+}
+
+static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r) {
+    ngx_http_jwt_memory_config_t config;
+    config.pool_type = NGX_HTTP_JWT_MEMORY_POOL_REGULAR;
+    config.pool = (ngx_pool_t *) r->pool;
+    if (ngx_http_jwt_memory_set(&config) != NGX_OK) return NGX_ERROR;
 
     ngx_http_jwt_loc_conf_t            *jwt_lcf;
     ngx_http_jwt_request_handler_checker_callback_ctx_t          ctx;
@@ -522,8 +621,6 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
     ngx_int_t                           len;
     char                               *token;
     jwt_checker_t                      *checker;
-    static const ngx_str_t authorization_string = ngx_string("Authorization");
-    static const ngx_str_t null_string = ngx_null_string;
 
     jwt_lcf = r->loc_conf[ngx_http_jwt_module.ctx_index];
 
@@ -531,7 +628,7 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
         return NGX_DECLINED;
     }
 
-    transaction = ngx_http_jwt_request_init(r);
+    transaction = ngx_http_jwt_request_transaction_init(r);
     if (transaction == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
@@ -545,7 +642,7 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
                         sizeof("Bearer ") - 1) != 0)
     {
         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT: invalid authorization header");
-        ngx_http_jwt_request_free(transaction);
+        ngx_http_jwt_request_transaction_free(transaction);
         return jwt_lcf->error_code;
     }
 
@@ -555,19 +652,11 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
 
     token = ngx_palloc(r->pool, len + 1);
     if (token == NULL) {
-        ngx_http_jwt_request_free(transaction);
+        ngx_http_jwt_request_transaction_free(transaction);
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
     ngx_memcpy(token, authorization->value.data + (sizeof("Bearer ") - 1), len);
     token[len] = '\0';
-
-    if (jwt_lcf->filter == 1) {
-        if (ngx_http_jwt_request_set_header(transaction, authorization_string, null_string) != NGX_OK) {
-            ngx_http_jwt_request_free(transaction);
-            ngx_pfree(r->pool, token);
-            return NGX_HTTP_INTERNAL_SERVER_ERROR;
-        }
-    }
 
     // Checker & callback
     
@@ -577,7 +666,7 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
 
     checker = jwt_checker_new();
     if (checker == NULL) {
-        ngx_http_jwt_request_free(transaction);
+        ngx_http_jwt_request_transaction_free(transaction);
         ngx_pfree(r->pool, token);
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: could not create checker");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
@@ -587,7 +676,7 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
     // We'll use custom exp / nbf check in callback for clearer validation responsibility boundary and better performance (use nginx cached time).
     if (jwt_checker_time_leeway(checker, JWT_CLAIM_EXP, -1) != 0
      || jwt_checker_time_leeway(checker, JWT_CLAIM_NBF, -1) != 0) {
-        ngx_http_jwt_request_free(transaction);
+        ngx_http_jwt_request_transaction_free(transaction);
         ngx_pfree(r->pool, token);
         jwt_checker_free(checker);
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: could not disable JWT leeway");
@@ -601,7 +690,7 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
 
     if (jwt_checker_verify(checker, token) != 0) {
         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT: authorization failed");
-        ngx_http_jwt_request_free(transaction);
+        ngx_http_jwt_request_transaction_free(transaction);
         ngx_pfree(r->pool, token);
         jwt_checker_free(checker);
         return ctx.internal_server_error ? NGX_HTTP_INTERNAL_SERVER_ERROR : jwt_lcf->error_code;
@@ -612,7 +701,7 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
 
     // Apply transaction
 
-    if (ngx_http_jwt_request_apply(transaction) != NGX_OK) {
+    if (ngx_http_jwt_request_transaction_apply(transaction) != NGX_OK) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -621,11 +710,11 @@ ngx_http_jwt_request_handler(ngx_http_request_t *r) {
 }
 
 static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_t *config) {
-    ngx_http_jwt_request_handler_checker_callback_ctx_t         *ctx;
-    ngx_http_request_t                 *r;
+    ngx_http_jwt_request_handler_checker_callback_ctx_t *ctx;
+    ngx_http_request_t *r;
     ngx_flag_t *internal_server_error;
     ngx_http_jwt_request_transaction_t *transaction;
-    ngx_http_jwt_loc_conf_t            *jwt_lcf;
+    ngx_http_jwt_loc_conf_t *jwt_lcf;
     ngx_queue_t *q;
     static const ngx_str_t null_string = ngx_null_string;
 
@@ -638,15 +727,10 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
     // Set key & alg
 
     jwt_value_t kid;
-    jwk_set_t *default_jwks;
+    ngx_http_jwt_loaded_jwks_t *loaded_jwks;
+    ngx_http_jwt_jwks_storage_jwks_t *storage_jwks;
+    jwk_set_t *jwks;
     jwk_item_t *key;
-
-    default_jwks = jwt_lcf->default_jwks;
-    if (default_jwks == NGX_CONF_UNSET_PTR) {
-        // This is done runtime because default key / dynamic fetch w/ cache will be implemented in future. JWKS is hash table for a reason.
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: lcf->jwks not found");
-        return -1;
-    }
 
     jwt_set_GET_STR(&kid, "kid");
 
@@ -655,9 +739,20 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
         return -1;
     }
 
-    key = jwks_find_bykid(default_jwks, kid.str_val);
+    key = NULL;
+    for (q = ngx_queue_head(&jwt_lcf->loaded_jwkss);
+         q != ngx_queue_sentinel(&jwt_lcf->loaded_jwkss);
+         q = ngx_queue_next(q)) {
+        loaded_jwks = ngx_queue_data(q, ngx_http_jwt_loaded_jwks_t, queue);
+        storage_jwks = loaded_jwks->jwks;
+        jwks = ngx_http_jwt_jwks_storage_get_jwks(storage_jwks);
+        if (jwks == NULL) continue;
+        key = jwks_find_bykid(jwks, kid.str_val);
+        if (key != NULL) break;
+    }
+
     if (key == NULL) {
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: No jwk for kid");
+        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: No key found for kid (Current only implemented configuration loaded jwkss)");
         return -1;
     }
 
@@ -787,7 +882,7 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
             if (!(extract_claim->optional)) {
                 json_decref(token_body);
                 return -1;
-            } else if (ngx_http_jwt_request_set_header(transaction, extract_claim->header_name, null_string) != NGX_OK) {
+            } else if (ngx_http_jwt_request_transaction_add_action(transaction, extract_claim->header_name, null_string) != NGX_OK) {
                 json_decref(token_body);
                 *internal_server_error = 1;
                 return -1;
@@ -798,19 +893,22 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
         raw.data = (u_char *) json_dumps(value, JSON_ENCODE_ANY | JSON_COMPACT);
 
         if (raw.data == NULL) {
-            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT authorization: Extract claim value");
-            ngx_http_jwt_request_set_header(transaction, extract_claim->header_name, null_string); // Double fail. Doesn't care, just pass to fast finalization.
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT authorization: Cannot extract claim value");
             json_decref(token_body);
             *internal_server_error = 1;
             return -1;
         }
 
         if (ngx_strlen(raw.data) >= NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX) {
-            ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: Claim value too long");
-            if (ngx_http_jwt_request_set_header(transaction, extract_claim->header_name, null_string) != NGX_OK) {
+            ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: Extract claim value too long");
+            if (!(extract_claim->optional)) {
                 json_decref(token_body);
                 ngx_http_jwt_memory_free(raw.data);
+                return -1;
+            } else if (ngx_http_jwt_request_transaction_add_action(transaction, extract_claim->header_name, null_string) != NGX_OK) {
+                json_decref(token_body);
                 *internal_server_error = 1;
+                ngx_http_jwt_memory_free(raw.data);
                 return -1;
             }
             ngx_http_jwt_memory_free(raw.data);
@@ -829,7 +927,7 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
 
         ngx_encode_base64url(&encoded, &raw);
 
-        if (ngx_http_jwt_request_set_header(transaction, extract_claim->header_name, encoded) != NGX_OK) {
+        if (ngx_http_jwt_request_transaction_add_action(transaction, extract_claim->header_name, encoded) != NGX_OK) {
             ngx_pfree(r->pool, encoded.data);
             json_decref(token_body);
             ngx_http_jwt_memory_free(raw.data);
