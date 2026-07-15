@@ -3,7 +3,7 @@
         {
             "kty": "oct",
             "alg": "HS256",
-            "k": "HS256_KEY_VALUE_1_VERY_LONG_VALUE_AT_LEAST_32_BYTES_LONG",
+            "k": "SFMyNTZfS0VZX1ZBTFVFXzFfVkVSWV9MT05HX1ZBTFVFX0FUX0xFQVNUXzMyX0JZVEVTX0xPTkc",
             "kid": "1"
         }
     ]

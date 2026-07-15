@@ -170,10 +170,13 @@ static ngx_int_t ngx_http_jwt_jwks_storage_shared_init(ngx_shm_zone_t *shm_zone,
             case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OIDC:
                 // TODO: Somehow fetch the JWKS and update cache age min - max.
                 // Not implemented yet. (Will fail the test, you're welcome)
+                ngx_http_jwt_memory_set(&old_config);
+                return NGX_ERROR;
                 break;
             default:
                 ngx_http_jwt_memory_set(&old_config);
                 return NGX_ERROR;
+                break;
         }
     }
 

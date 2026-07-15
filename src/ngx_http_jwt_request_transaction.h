@@ -28,6 +28,7 @@ typedef struct ngx_http_jwt_request_transaction_s ngx_http_jwt_request_transacti
 ngx_http_jwt_request_transaction_t *ngx_http_jwt_request_transaction_init(ngx_http_request_t *r);
 
 // Frees a transaction.
+// The transaction is entirely on request pool, so you might not need to free it.
 void ngx_http_jwt_request_transaction_free(ngx_http_jwt_request_transaction_t *transaction);
 
 // Adds an action to the transaction. It expects name / value to be legal (does not check).

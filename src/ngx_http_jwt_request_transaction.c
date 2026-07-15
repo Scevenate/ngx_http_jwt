@@ -89,9 +89,7 @@ ngx_int_t ngx_http_jwt_request_transaction_apply(ngx_http_jwt_request_transactio
     ngx_http_jwt_request_action_t *entry;
     ngx_uint_t i;
     ngx_list_part_t *part;
-    ngx_table_elt_t *h, **hr;
-    ngx_http_header_t *hh;
-    ngx_uint_t hash;
+    ngx_table_elt_t *h, **hr; // Header, header reserved
 
     for (q = ngx_queue_head(&transaction->actions);
          q != ngx_queue_sentinel(&transaction->actions);
@@ -99,19 +97,8 @@ ngx_int_t ngx_http_jwt_request_transaction_apply(ngx_http_jwt_request_transactio
         entry = ngx_queue_data(q, ngx_http_jwt_request_action_t, queue);
         part = &transaction->r->headers_in.headers.part;
         h = part->elts;
-
-        // Find hr: reserved header pointer
         hr = NULL;
-        for (hh = ngx_http_headers_in; hh->name.len; hh++) {
-            if (hh->name.len == entry->name.len
-            && ngx_strncasecmp(hh->name.data, entry->name.data, entry->name.len) == 0)
-            {
-                hr = (ngx_table_elt_t **) (((char *) &transaction->r->headers_in) + hh->offset);
-                break;
-            }
-        }
 
-        // Remove existing headers
         for (i = 0;;) {
             if (i >= part->nelts) {
                 if (part->next == NULL) {
@@ -125,8 +112,8 @@ ngx_int_t ngx_http_jwt_request_transaction_apply(ngx_http_jwt_request_transactio
             }
 
             if (h[i].hash != 0
-            && h[i].key.len == entry->name.len
-            && ngx_strncasecmp(h[i].key.data, entry->name.data, entry->name.len) == 0)
+             && h[i].key.len == entry->name.len
+             && ngx_strncasecmp(h[i].key.data, entry->name.data, entry->name.len) == 0)
             {
                 /*
                 * As of nginx v1.31.0, the proxy module does not respect hash = 0 header invalidation.
@@ -164,14 +151,13 @@ ngx_int_t ngx_http_jwt_request_transaction_apply(ngx_http_jwt_request_transactio
 
         h->lowcase_key = ngx_pnalloc(transaction->r->pool, entry->name.len);
         if (h->lowcase_key == NULL) {
-            // Doing free here just free the current header. Just be lazy, don't larp.
+            // Doing free here just frees the current header, so completely skipping.
             return NGX_ERROR;
         }
-        hash = ngx_hash_strlow(h->lowcase_key, entry->name.data, entry->name.len);
 
         h->value.len = entry->value.len;
         h->value.data = entry->value.data;
-        h->hash = hash;
+        h->hash = ngx_hash_strlow(h->lowcase_key, entry->name.data, entry->name.len);
     }
 
     // Free transaction
