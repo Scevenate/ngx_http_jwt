@@ -14,34 +14,29 @@ from dataclasses import dataclass
 
 MODE: Literal["dev", "container"]
 
+# Try increase start wait if connection refused, etc.
 match os.environ.get("MODE"):
     case "dev":
         MODE = "dev"
+        NGINX_START_WAIT_TIME = 0.2
     case "container":
         MODE = "container"
-    case "None":
-        raise ValueError("No test mode provided.")
+        NGINX_START_WAIT_TIME = 0.3
     case _:
-        raise ValueError("Invalid test mode.")
-
-# Try increase this value if connection refused
-NGINX_START_WAIT_TIME = 0.2
+        raise ValueError("Invalid test MODE")
 
 TEST_ROOT = Path(__file__).parent
 NGINX_PATH =   TEST_ROOT / "nginx" / "objs" / "nginx"
 NGINX_PREFIX = TEST_ROOT / "prefix"
-NGINX_CONF =   TEST_ROOT / "tests" / "nginx.conf"
+NGINX_CONF =   TEST_ROOT / "nginx.conf"
 
 # Remove previous logs
 subprocess.run(['rm', '-r', TEST_ROOT / "prefix" / "logs"])
-os.mkdir(TEST_ROOT / "prefix" / "logs")
+(NGINX_PREFIX / "logs").mkdir(parents=True) # exists is not ok
 
 @pytest.fixture(scope="session", autouse=True)
 def _nginx():
-    match MODE:
-        case "dev":
-            subprocess.run(["pkill", "-x", "nginx"])
-            NGINX_CONF.write_text("""
+    NGINX_CONF.write_text("""
 # A minimal nginx conf before hot reloads
 events { worker_connections 1024; }
 http {
@@ -54,7 +49,9 @@ http {
     }
 }
 """)
-
+    match MODE:
+        case "dev":
+            subprocess.run(["pkill", "-x", "nginx"])
             process = subprocess.Popen(
                 [
                     NGINX_PATH,
@@ -68,7 +65,31 @@ http {
             process.terminate()
             process.wait()
         case "container":
-            return
+            subprocess.run(
+                ["docker", "rm", "-f", "nginx-jwt-test"],
+                capture_output=True,
+            )
+            subprocess.Popen(
+                [
+                    "docker", "run",
+                    "--rm",
+                    "--name", "nginx-jwt-test",
+                    "--network", "host",
+                    "-v", f"{TEST_ROOT}:/test_root",
+                    "scevenate/nginx-jwt",
+                    "nginx",
+                    "-p", "/test_root/prefix",
+                    "-c", "/test_root/nginx.conf",
+                    "-g", "daemon off; error_log logs/error.log debug;",
+                ]
+            )
+            sleep(NGINX_START_WAIT_TIME)
+            yield
+            subprocess.run(
+                ["docker", "stop", "nginx-jwt-test"],
+                capture_output=True,
+            )
+    subprocess.run(["rm", NGINX_CONF])
 
 @pytest.fixture(autouse=True)
 def _nginx_reload(request: pytest.FixtureRequest, _nginx):
@@ -94,12 +115,45 @@ def _nginx_reload(request: pytest.FixtureRequest, _nginx):
                     f"[return code {nginx_test.returncode}]:\n{nginx_test.stderr}"
                 )
 
-            subprocess.run(
-                [NGINX_PATH, "-p", NGINX_PREFIX, "-c", NGINX_CONF, "-s", "reload"]
-            )
+            subprocess.run([
+                NGINX_PATH,
+                "-p", NGINX_PREFIX,
+                "-c", NGINX_CONF,
+                "-g", "error_log logs/error.log debug;",
+                "-s", "reload"
+            ])
             sleep(NGINX_START_WAIT_TIME)
             return
         case "container":
+            TEST_CONF = TEST_ROOT / "tests" / (request.path.stem + ".conf")
+            shutil.copy(TEST_CONF, NGINX_CONF)
+
+            nginx_test = subprocess.run([
+                    "docker", "exec", "nginx-jwt-test",
+                    "nginx",
+                    "-t",
+                    "-p", "/test_root/prefix",
+                    "-c", "/test_root/nginx.conf",
+                    "-g", "error_log logs/error.log debug;",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if nginx_test.returncode != 0:
+                raise AssertionError(
+                    f"Configuration file {TEST_CONF} test failed "
+                    f"[return code {nginx_test.returncode}]:\n{nginx_test.stderr}"
+                )
+
+            subprocess.run([
+                "docker", "exec", "nginx-jwt-test",
+                "nginx", 
+                "-s", "reload",
+                "-p", "/test_root/prefix",
+                "-c", "/test_root/nginx.conf",
+                "-g", "error_log logs/error.log debug;",
+            ])
+            sleep(NGINX_START_WAIT_TIME)
             return
 
 

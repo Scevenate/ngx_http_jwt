@@ -3,3 +3,4 @@
 prefix/
 nginx/
 .pytest_cache/
+nginx.conf
