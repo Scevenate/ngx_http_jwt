@@ -1,17 +1,13 @@
-from .lib import NginxTestCase
 from requests import Session
 import jwt
 import time
 
-class TestRsaFail(NginxTestCase):
-    test_file = __file__
-
-    def test_rsa_fail(self):
-        with Session() as session:
-            jwt_token = jwt.encode(
-                {"exp": time.time(),
-                "nbf": time.time()},
-                """-----BEGIN PRIVATE KEY-----
+def test_success_rsa():
+    with Session() as session:
+        jwt_token = jwt.encode(
+            {"exp": time.time(),
+            "nbf": time.time()},
+            """-----BEGIN PRIVATE KEY-----
 MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDiGkGqC0lIqQ1E
 Ipu48rRu1+W1BrMRhfzAOYkgJXtgYM83oDuVan8kdtNw/SkwHQzrc7XYA6D5W5z2
 Ig95MYo2tLbNp16Ww+AYEpdSJq9iS3ODLhekGtOvdR1c8M8qmX3h/0KbYvUHoRBn
@@ -39,10 +35,10 @@ ytRYwwMKkBXy19dDX6gjJ8bFkAQISWQ+O72Ej/FuCO5CYee8Jk9BrF5kFWeh2kcx
 eQBVvgQuXyaWH/YY58tLsWmMh3fqLjKp7zs6VEuHEa8VQ1QLCrT3v6ehkXdROJTY
 vISbmkPxtYPaMfMpcpW8MQ==
 -----END PRIVATE KEY-----""",
-                "RS256",
-                {"kid": "rsa_key"},
-            )
-            response = session.get("http://localhost:8080/robots.txt", headers={
-                "Authorization": f"Bearer {jwt_token}"
-            })
-            assert response.status_code == 405
+            "RS256",
+            {"kid": "rsa_key"},
+        )
+        response = session.get("http://localhost:8080/robots.txt", headers={
+            "Authorization": f"Bearer {jwt_token}"
+        })
+        assert response.status_code == 200

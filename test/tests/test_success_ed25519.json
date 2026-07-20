@@ -3,7 +3,7 @@
         {
             "kty": "OKP",
             "crv": "Ed25519",
-            "x": "AsCZFhNKKyRh0NNPVJNLZl4TMy/30Sx+kkDrhVwLnYI",
+            "x": "AsCZFhNKKyRh0NNPVJNLZl4TMy_30Sx-kkDrhVwLnYI",
             "kid": "ed25519_key"
         }
     ]

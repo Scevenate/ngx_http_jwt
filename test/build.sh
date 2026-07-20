@@ -1,19 +1,23 @@
 #!/bin/bash
-TEST_ROOT=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+NGINX="nginx-release-1.31.2"
 
-rm -rf "$TEST_ROOT/build"
-mkdir "$TEST_ROOT/build"
+ROOT=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/../.." &> /dev/null && pwd )
 
-cd "$TEST_ROOT/../../nginx" || exit 1
+rm -rf "$ROOT/ngx_http_jwt/test/nginx" || true
+
+cp -r "$ROOT/$NGINX" "$ROOT/ngx_http_jwt/test"
+
+mv "$ROOT/ngx_http_jwt/test/$NGINX" "$ROOT/ngx_http_jwt/test/nginx"
+
+cd "$ROOT/ngx_http_jwt/test/nginx"
 
 ./auto/configure \
 --build="JWT test build" \
---builddir="$TEST_ROOT/build" \
---with-cc-opt="-I /usr/local/include" \
---with-ld-opt="-L /usr/local/lib" \
---add-module="$TEST_ROOT/../src" \
+--add-module="$ROOT/ngx_http_jwt/src" \
 --with-debug
 
-make || exit 1
+make
 
-mkdir -p "$TEST_ROOT/build/logs" || exit 1
+rm -rf "$ROOT/ngx_http_jwt/test/prefix"
+
+mkdir -p "$ROOT/ngx_http_jwt/test/prefix/logs"
