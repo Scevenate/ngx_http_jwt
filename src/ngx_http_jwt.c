@@ -660,6 +660,7 @@ static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r) {
     ngx_str_t token;
 
     switch (jwt_lcf->location.type) {
+        case NGX_HTTP_JWT_LOCATION_UNSET:
         case NGX_HTTP_JWT_LOCATION_OFF:
             return NGX_DECLINED;
         case NGX_HTTP_JWT_LOCATION_BEARER:

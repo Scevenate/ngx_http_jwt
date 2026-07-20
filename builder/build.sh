@@ -63,4 +63,4 @@ auto/configure \
 
 make || exit 1
 
-echo "Please delete the build dependency of install make target."
+echo "Please delete the build dependency of install make target, then build the image."
