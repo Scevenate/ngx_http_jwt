@@ -34,7 +34,7 @@ services:
 
 Config example:
 
-```nginx.conf
+```nginx
 events {
     worker_connections 1024;
 }
