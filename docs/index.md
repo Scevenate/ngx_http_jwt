@@ -1,6 +1,6 @@
-# `ngx_http_jwt` module docs `v1.0.0`
+## `ngx_http_jwt` module docs `v1.0.0`
 
-# Documentation
+## Documentation
 
 - [Versioning](versioning.md)
 - [Builds](builds.md)

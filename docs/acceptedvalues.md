@@ -1,6 +1,6 @@
-# `ngx_http_jwt` module docs `v1.0.0`
+## `ngx_http_jwt` module docs `v1.0.0`
 
-# Accepted Values
+## Accepted Values
 
 - All JWT must be signed.
 - Claim names must be `.*{0, 2048}`.

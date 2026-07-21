@@ -1,8 +1,8 @@
-# `ngx_http_jwt` module docs `v1.0.0`
+## `ngx_http_jwt` module docs `v1.0.0`
 
-# Builds
+## Builds
 
-## Dependencies
+### Dependencies
 
 This project has the following build dependencies:
 - `nginx` (`>=1.31.2`)
@@ -18,13 +18,11 @@ This project has the following build dependencies:
 
 `v1.0.0` is tested and built on the version specified above.
 
-## Prebuilts
+### Prebuilts
 
-`v1.0.0` build is available on dockerhub repository `scevenate/nginx-jwt`. 
+`v1.0.0` build is available on dockerhub `scevenate/nginx-jwt:v1.0.0`.
 
-An example docker compose configuration:
-
-## Build from source
+### Build from source
 
 Please refer to [Nginx build system](https://nginx.org/en/docs/configure.html) to build `ngx_http_jwt` as a standard static add on module.
 
