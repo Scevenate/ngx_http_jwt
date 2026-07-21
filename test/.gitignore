@@ -1,4 +1,6 @@
 **/__pycache__/
-
 .venv/
-build/
+prefix/
+nginx/
+.pytest_cache/
+nginx.conf
