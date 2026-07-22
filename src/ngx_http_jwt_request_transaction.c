@@ -30,23 +30,6 @@ ngx_http_jwt_request_transaction_t *ngx_http_jwt_request_transaction_init(ngx_ht
     return transaction;
 }
 
-void ngx_http_jwt_request_transaction_free(ngx_http_jwt_request_transaction_t *transaction) {
-    ngx_queue_t *q, *next;
-    ngx_http_jwt_request_action_t *entry;
-
-    for (q = ngx_queue_head(&transaction->actions);
-         q != ngx_queue_sentinel(&transaction->actions);
-         q = next) {
-        next = ngx_queue_next(q);
-        entry = ngx_queue_data(q, ngx_http_jwt_request_action_t, queue);
-        ngx_pfree(transaction->r->pool, entry->name.data);
-        ngx_pfree(transaction->r->pool, entry->value.data);
-        ngx_pfree(transaction->r->pool, entry);
-    }
-
-    ngx_pfree(transaction->r->pool, transaction);
-}
-
 ngx_int_t ngx_http_jwt_request_transaction_add_action(ngx_http_jwt_request_transaction_t *transaction, ngx_str_t name, ngx_str_t value) {
     ngx_http_jwt_request_action_t *entry;
 
@@ -57,7 +40,6 @@ ngx_int_t ngx_http_jwt_request_transaction_add_action(ngx_http_jwt_request_trans
 
     entry->name.data = ngx_pnalloc(transaction->r->pool, name.len + 1);
     if (entry->name.data == NULL) {
-        ngx_pfree(transaction->r->pool, entry);
         return NGX_ERROR;
     }
     entry->name.len = name.len;
@@ -70,8 +52,6 @@ ngx_int_t ngx_http_jwt_request_transaction_add_action(ngx_http_jwt_request_trans
     } else {
         entry->value.data = ngx_pnalloc(transaction->r->pool, value.len + 1);
         if (entry->value.data == NULL) {
-            ngx_pfree(transaction->r->pool, entry->name.data);
-            ngx_pfree(transaction->r->pool, entry);
             return NGX_ERROR;
         }
         entry->value.len = value.len;
@@ -85,7 +65,7 @@ ngx_int_t ngx_http_jwt_request_transaction_add_action(ngx_http_jwt_request_trans
 }
 
 ngx_int_t ngx_http_jwt_request_transaction_apply(ngx_http_jwt_request_transaction_t *transaction) {
-    ngx_queue_t *q, *next;
+    ngx_queue_t *q;
     ngx_http_jwt_request_action_t *entry;
     ngx_uint_t i;
     ngx_list_part_t *part;
@@ -145,13 +125,11 @@ ngx_int_t ngx_http_jwt_request_transaction_apply(ngx_http_jwt_request_transactio
 
         // We move the ownership of entry data from transaction to the new header.
         // (This is why the transaction does not borrow data when setting action in the first place.)
-        // A custom transaction free is performed at the bottom of this function.
         h->key.len = entry->name.len;
         h->key.data = entry->name.data;
 
         h->lowcase_key = ngx_pnalloc(transaction->r->pool, entry->name.len);
         if (h->lowcase_key == NULL) {
-            // Doing free here just frees the current header, so completely skipping.
             return NGX_ERROR;
         }
 
@@ -159,17 +137,6 @@ ngx_int_t ngx_http_jwt_request_transaction_apply(ngx_http_jwt_request_transactio
         h->value.data = entry->value.data;
         h->hash = ngx_hash_strlow(h->lowcase_key, entry->name.data, entry->name.len);
     }
-
-    // Free transaction
-    for (q = ngx_queue_head(&transaction->actions);
-         q != ngx_queue_sentinel(&transaction->actions);
-         q = next) {
-        entry = ngx_queue_data(q, ngx_http_jwt_request_action_t, queue);
-        next = ngx_queue_next(q);
-        // The ownership of entry name / value are transferred.
-        ngx_pfree(transaction->r->pool, entry);
-    }
-    ngx_pfree(transaction->r->pool, transaction);
 
     return NGX_OK;
 }

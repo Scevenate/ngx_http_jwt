@@ -46,6 +46,7 @@ struct ngx_http_jwt_jwks_storage_jwks_storage_s {
     ngx_event_t *refresh_event;
 };
 
+extern ngx_module_t ngx_http_jwt_module;
 
 static ngx_str_t jwks_storage_zone_name = ngx_string("ngx_http_jwt_jwks_storage");
 

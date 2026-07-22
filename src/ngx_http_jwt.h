@@ -23,8 +23,4 @@
 #define NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX 2048 // Include null terminator
 #define NGX_HTTP_JWT_HEADER_NAME_LEN_MAX 2048 // Include null terminator
 
-
-extern ngx_module_t ngx_http_jwt_module;
-
-
 #endif /* NGX_HTTP_JWT_H */

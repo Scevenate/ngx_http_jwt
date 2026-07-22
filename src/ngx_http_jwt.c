@@ -4,7 +4,6 @@
  */
 
 
-#include "ngx_conf_file.h"
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
@@ -781,7 +780,6 @@ static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r) {
     if (jwt_checker_time_leeway(checker, JWT_CLAIM_EXP, -1) != 0
      || jwt_checker_time_leeway(checker, JWT_CLAIM_NBF, -1) != 0) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT: Cannot disable libjwt checks");
-        jwt_checker_free(checker);
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -793,11 +791,8 @@ static ngx_int_t ngx_http_jwt_request_handler(ngx_http_request_t *r) {
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT: All set, validating token");
     if (jwt_checker_verify(checker, (const char*) token.data) != 0) {
         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT: authorization failed");
-        jwt_checker_free(checker);
         return ctx.internal_server_error ? NGX_HTTP_INTERNAL_SERVER_ERROR : jwt_lcf->error_code;
     }
-
-    jwt_checker_free(checker);
 
     // Apply transaction
 
@@ -891,7 +886,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
     }
 
     token_body = json_loads(token_body_value.json_val, JSON_REJECT_DUPLICATES, NULL);
-    ngx_http_jwt_memory_free(token_body_value.json_val);
     if (token_body == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT authorization: cannot load token body as JSON object (should not happen)");
         *internal_server_error = 1;
@@ -900,7 +894,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
 
     if (!json_is_object(token_body)) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT authorization: token body is not a JSON object (should not happen)");
-        json_decref(token_body);
         *internal_server_error = 1;
         return -1;
     }
@@ -919,7 +912,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
 
         if (value == NULL) {
             ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: validated claim %V not found", &validate_claim->name);
-            json_decref(token_body);
             return -1;
         }
 
@@ -927,7 +919,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
             case NGX_HTTP_JWT_VALIDATE_EQUALS:
                 if (json_equal(value, validate_claim->value) != 1) {
                     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: validated claim %V has invalid value", &validate_claim->name);
-                    json_decref(token_body);
                     return -1;
                 }
                 break;
@@ -945,7 +936,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
                     }
                     if (found_value == NULL) {
                         ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: validated claim %V has invalid value", &validate_claim->name);
-                        json_decref(token_body);
                         return -1;
                     }
                 }
@@ -954,7 +944,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
                 if (!json_is_number(value)
                  || json_number_value(value) < ngx_time() - json_number_value(validate_claim->value)) {
                     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: validated claim %V has invalid value", &validate_claim->name);
-                    json_decref(token_body);
                     return -1;
                 }
                 break;
@@ -962,13 +951,11 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
                 if (!json_is_number(value)
                  || json_number_value(value) > ngx_time() + json_number_value(validate_claim->value)) {
                     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: validated claim %V has invalid value", &validate_claim->name);
-                    json_decref(token_body);
                     return -1;
                 }
                 break;
             default:
                 ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: validated claim %V has invalid runtime type (should not happen)", &validate_claim->name);
-                json_decref(token_body);
                 return -1;
         }
         
@@ -989,11 +976,9 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
         if (value == NULL) {
             if (!(extract_claim->optional)) {
                 ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: extracted claim %V not found (not optional)", &extract_claim->claim_name);
-                json_decref(token_body);
                 return -1;
             } else if (ngx_http_jwt_request_transaction_add_action(transaction, extract_claim->header_name, null_string) != NGX_OK) {
                 ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "JWT authorization: Cannot add null action to transaction for not found extract claim");
-                json_decref(token_body);
                 *internal_server_error = 1;
                 return -1;
             }
@@ -1005,7 +990,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
 
         if (raw.data == NULL) {
             ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: Cannot extract claim %V", &extract_claim->claim_name);
-            json_decref(token_body);
             *internal_server_error = 1;
             return -1;
         }
@@ -1013,12 +997,9 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
         if (ngx_strlen(raw.data) >= NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX) {
             if (!(extract_claim->optional)) {
                 ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: Extract claim value %V too long (not optional)", &extract_claim->claim_name);
-                json_decref(token_body);
-                ngx_http_jwt_memory_free(raw.data);
                 return -1;
             }
             ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: Extract claim %V value too long (optional, skipping)", &extract_claim->claim_name);
-            ngx_http_jwt_memory_free(raw.data);
             continue;
         }
 
@@ -1027,8 +1008,6 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
         encoded.data = ngx_palloc(r->pool, ngx_base64_encoded_length(raw.len));
         if (encoded.data == NULL) {
             ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: Failed initializing base64 string");
-            json_decref(token_body);
-            ngx_http_jwt_memory_free(raw.data);
             *internal_server_error = 1;
             return -1;
         }
@@ -1037,18 +1016,11 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
 
         if (ngx_http_jwt_request_transaction_add_action(transaction, extract_claim->header_name, encoded) != NGX_OK) {
             ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: Cannot add transaction action");
-            json_decref(token_body);
-            ngx_http_jwt_memory_free(raw.data);
             *internal_server_error = 1;
             return -1;
         }
-
-        ngx_pfree(r->pool, encoded.data);
-        ngx_http_jwt_memory_free(raw.data);
         continue;
     }
-
-    json_decref(token_body);
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: All checks passed");
     return 0;
