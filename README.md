@@ -1,15 +1,13 @@
 # ngx_http_jwt
 
-*Nginx module for JWT*
-
 > [!IMPORTANT]
-> As of the current `libjwt v3`, the underlying library does not support JWE yet. But it is said that the library will soon ship `libjwt v4` with [full JWE support](https://github.com/benmcollins/libjwt/issues/158). JWE support will be added to this project by then.
+> This module initially intends to progressively provide more powerful control over existing nginx jwt solutions. However after reviewing the features of the product, it does not seem to add much value. Therefore this project is no longer maintained.
 
 ## [Documentation](docs/index.md)
 
 ## Overview
 
-This module adds JWT authorization functionality to nginx. It allows nginx to fetch a token from request, validate its claims and extract values to proxy if you still need any.
+This module extends nginx for custom JWT authorization. It allows nginx to fetch a token from request, validate its claims and extract values to proxy if you still need any.
 
 > [!NOTE]
 > The current release only supports local JWKS. Remote JWKS is being actively planned.
@@ -113,7 +111,8 @@ http {
             # These two directives validate the claim version by
             # predicate in, that the claim value must equal to
             # one of the JSON values in the JSON array.
-            # Then, the value is extarcted into header version for proxy.
+            # Then, the value is extarcted as base64url value into
+            # header version for proxy.
             jwt_validate version in '[1, 2]';
             jwt_extract version version;
         }
