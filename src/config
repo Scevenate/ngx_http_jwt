@@ -1,5 +1,6 @@
-#!/bin/bash # QoL: So this file is consistently detectable as shell script.
+#!/bin/bash
 # This script is meant to be source interpreted (and it has a-x permissions) so it makes no difference.
+# This is just for the script to be consistently identifiable as bash script.
 
 ngx_module_type=HTTP
 ngx_module_name=ngx_http_jwt_module

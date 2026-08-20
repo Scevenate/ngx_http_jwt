@@ -4,7 +4,6 @@
  */
 
 
-#include "ngx_slab.h"
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
@@ -52,7 +51,7 @@ static ngx_str_t jwks_storage_zone_name = ngx_string("ngx_http_jwt_jwks_storage"
 
 static ngx_int_t ngx_http_jwt_jwks_storage_shared_init(ngx_shm_zone_t *shm_zone, void *data); // Data is ngx_http_jwt_jwks_storage_jwks_storage_t.
 
-static void ngx_http_jwt_jwks_storage_refresh_event_handler(ngx_event_t *ev); // ev->data is ngx_http_jwt_jwks_storage_jwks_t.
+// static void ngx_http_jwt_jwks_storage_refresh_event_handler(ngx_event_t *ev);
 
 ngx_http_jwt_jwks_storage_jwks_storage_t *ngx_http_jwt_jwks_storage_init(ngx_conf_t *cf) {
     ngx_http_jwt_jwks_storage_jwks_storage_t *jwks_storage;
@@ -80,9 +79,6 @@ ngx_http_jwt_jwks_storage_jwks_t *ngx_http_jwt_jwks_storage_add_jwks(ngx_http_jw
     // First resolve the full URI.
     switch (type) {
         case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_STRING:
-        case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_URL:
-        case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OAUTH:
-        case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OIDC:
             full_uri.data = ngx_palloc(jwks_storage->cycle->pool, uri.len + 1);
             if (full_uri.data == NULL) return NULL;
             ngx_memcpy(full_uri.data, uri.data, uri.len);
@@ -95,6 +91,9 @@ ngx_http_jwt_jwks_storage_jwks_t *ngx_http_jwt_jwks_storage_add_jwks(ngx_http_jw
                 return NULL;
             }
             break;
+        case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_URL:
+        case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OAUTH:
+        case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OIDC:
         default:
             ngx_log_error(NGX_LOG_ERR, jwks_storage->cycle->log, 0, "JWKS: Invalid JWKS storage type");
             return NULL;
@@ -122,6 +121,7 @@ ngx_http_jwt_jwks_storage_jwks_t *ngx_http_jwt_jwks_storage_add_jwks(ngx_http_jw
 }
 
 static ngx_int_t ngx_http_jwt_jwks_storage_shared_init(ngx_shm_zone_t *shm_zone, void *data) {
+    // Memory redirection
     ngx_http_jwt_memory_config_t config, old_config;
     if (ngx_http_jwt_memory_get(&old_config) != NGX_OK) return NGX_ERROR;
     config.pool_type = NGX_HTTP_JWT_MEMORY_POOL_SLAB;
@@ -169,11 +169,6 @@ static ngx_int_t ngx_http_jwt_jwks_storage_shared_init(ngx_shm_zone_t *shm_zone,
             case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_URL:
             case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OAUTH:
             case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OIDC:
-                // TODO: Somehow fetch the JWKS and update cache age min - max.
-                // Not implemented yet. (Will fail the test, you're welcome)
-                ngx_http_jwt_memory_set(&old_config);
-                return NGX_ERROR;
-                break;
             default:
                 ngx_http_jwt_memory_set(&old_config);
                 return NGX_ERROR;
@@ -185,61 +180,9 @@ static ngx_int_t ngx_http_jwt_jwks_storage_shared_init(ngx_shm_zone_t *shm_zone,
     return NGX_OK;
 }
 
-ngx_int_t ngx_http_jwt_jwks_storage_setup_timers(ngx_http_jwt_jwks_storage_jwks_storage_t *jwks_storage) {
-    ngx_queue_t *q;
-    ngx_http_jwt_jwks_storage_jwks_t *storage_jwks;
-    ngx_event_t *refresh_event;
+// ngx_int_t ngx_http_jwt_jwks_storage_setup_timers(ngx_http_jwt_jwks_storage_jwks_storage_t *jwks_storage)
 
-    for (q = ngx_queue_head(&jwks_storage->jwkss);
-         q != ngx_queue_sentinel(&jwks_storage->jwkss);
-         q = ngx_queue_next(q)) {
-        storage_jwks = ngx_queue_data(q, ngx_http_jwt_jwks_storage_jwks_t, queue);
-        switch (storage_jwks->type) {
-            case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_STRING:
-            case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_FILE:
-                break;
-            case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_URL:
-            case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OAUTH:
-            case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OIDC:
-                refresh_event = ngx_pcalloc(jwks_storage->cycle->pool, sizeof(ngx_event_t));
-                if (refresh_event == NULL) return NGX_ERROR;
-                refresh_event->data = storage_jwks;
-                refresh_event->handler = ngx_http_jwt_jwks_storage_refresh_event_handler;
-                refresh_event->write = 1;
-                refresh_event->log = jwks_storage->cycle->log;
-                refresh_event->cancelable = 1;
-                jwks_storage->refresh_event = refresh_event;
-                ngx_http_jwt_jwks_storage_refresh_event_handler(refresh_event);
-                break;
-            default:
-                return NGX_ERROR;
-        }
-    }
-    return NGX_OK;
-}
-
-static void ngx_http_jwt_jwks_storage_refresh_event_handler(ngx_event_t *ev) {
-    ngx_http_jwt_jwks_storage_jwks_t *jwks;
-    ngx_msec_t threshold;
-
-    jwks = ev->data;
-    threshold = jwks->shared->cache_until - NGX_HTTP_JWT_JWKS_STORAGE_CACHE_AGE_THRESHOLD;
-    if (threshold > ngx_current_msec) {
-        ngx_event_add_timer(ev, threshold - ngx_current_msec);
-        return;
-    }
-    
-    if (!ngx_trylock(&jwks->shared->lock)) {
-        ngx_event_add_timer(ev, NGX_HTTP_JWT_JWKS_STORAGE_CACHE_AGE_BACKOFF);
-        return;
-    }
-
-    // TODO: Somehow fetch the JWKS and update cache age min - max.
-    // Not implemented yet. (Will fail the test, you're welcome)
-    
-    ngx_unlock(&jwks->shared->lock);
-    return;
-}
+// static void ngx_http_jwt_jwks_storage_refresh_event_handler(ngx_event_t *ev)
 
 jwk_set_t *ngx_http_jwt_jwks_storage_get_jwks(ngx_http_jwt_jwks_storage_jwks_t *jwks) {
     switch (jwks->type) {

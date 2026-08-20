@@ -35,17 +35,12 @@ ngx_http_jwt_jwks_storage_jwks_storage_t *ngx_http_jwt_jwks_storage_init(ngx_con
 // Add JWKS to temporary cycle registeration structure at configuration time.
 // The actual JWKS will be populated after configuration parsing, when the shared memory zone is allocated in master process. (before postconfiguration)
 // The uri data is borrowed, the storage keeps an internal copy.
-// Relative file path is expanded by cycle prefix. URL are treated as is. All URIs are case sensitive.
+// Relative file path is expanded by cycle prefix, all URI are treated case sensitively.
 // Returns NULL on error.
 ngx_http_jwt_jwks_storage_jwks_t *ngx_http_jwt_jwks_storage_add_jwks(ngx_http_jwt_jwks_storage_jwks_storage_t *jwks_storage, ngx_http_jwt_jwks_storage_type_t type, ngx_str_t uri);
-
-// Setup events for refreshing JWKS from URL / OAuth / OIDC.
-// This function should be called once for every worker process during initialization.
-ngx_int_t ngx_http_jwt_jwks_storage_setup_timers(ngx_http_jwt_jwks_storage_jwks_storage_t *jwks_storage);
 
 // Get JWKS from storage JWKS object.
 // Returns NULL if jwks expired.
 jwk_set_t *ngx_http_jwt_jwks_storage_get_jwks(ngx_http_jwt_jwks_storage_jwks_t *jwks);
-
 
 #endif /* NGX_HTTP_JWT_JWKS_STORAGE_H */

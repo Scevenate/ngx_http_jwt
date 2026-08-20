@@ -1,5 +1,5 @@
 #!/bin/bash
-NGINX="nginx-release-1.31.2"
+NGINX="nginx-release-1.31.3"
 
 ROOT=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )/../.." &> /dev/null && pwd )
 
