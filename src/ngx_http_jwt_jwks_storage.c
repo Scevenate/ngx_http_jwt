@@ -192,10 +192,6 @@ jwk_set_t *ngx_http_jwt_jwks_storage_get_jwks(ngx_http_jwt_jwks_storage_jwks_t *
         case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_URL:
         case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OAUTH:
         case NGX_HTTP_JWT_JWKS_STORAGE_TYPE_OIDC:
-            if (jwks->shared->cache_until >= ngx_current_msec) {
-                return jwks->shared->jwks;
-            }
-            return NULL;
         default:
             return NULL;
     }

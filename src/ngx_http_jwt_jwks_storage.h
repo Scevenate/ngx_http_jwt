@@ -43,4 +43,6 @@ ngx_http_jwt_jwks_storage_jwks_t *ngx_http_jwt_jwks_storage_add_jwks(ngx_http_jw
 // Returns NULL if jwks expired.
 jwk_set_t *ngx_http_jwt_jwks_storage_get_jwks(ngx_http_jwt_jwks_storage_jwks_t *jwks);
 
+// ngx_int_t ngx_http_jwt_jwks_storage_setup_timers(ngx_http_jwt_jwks_storage_jwks_storage_t *jwks_storage)
+
 #endif /* NGX_HTTP_JWT_JWKS_STORAGE_H */

@@ -10,7 +10,6 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
-#include <ngx_http_jwt_request_transaction.h>
 #include <ngx_http_jwt_jwks_storage.h>
 #include <ngx_http_jwt_memory.h>
 

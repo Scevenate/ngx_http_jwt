@@ -8,7 +8,6 @@ ngx_module_incs="$ngx_addon_dir"
 ngx_module_deps=
 ngx_module_srcs="$ngx_addon_dir/ngx_http_jwt.c \
                   $ngx_addon_dir/ngx_http_jwt_jwks_storage.c \
-                  $ngx_addon_dir/ngx_http_jwt_request_transaction.c \
                   $ngx_addon_dir/ngx_http_jwt_memory.c"
 ngx_module_libs="-ljansson -ljwt"
 
