@@ -6,8 +6,9 @@ def test_exp_fail():
     with Session() as session:
         jwt_token = jwt.encode(
             {
-                "exp": time.time(),
-                "nbf": time.time(),
+                "exp": time.time() + 5,
+                "nbf": time.time() - 5,
+                "pop": "",
                 "food": "bar",
                 "null": "",
                 "continent": "SA",

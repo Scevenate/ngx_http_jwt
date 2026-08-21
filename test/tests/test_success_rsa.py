@@ -5,8 +5,8 @@ import time
 def test_success_rsa():
     with Session() as session:
         jwt_token = jwt.encode(
-            {"exp": time.time(),
-            "nbf": time.time()},
+            {"exp": time.time() + 2,
+            "nbf": time.time() - 2},
             """-----BEGIN PRIVATE KEY-----
 MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDiGkGqC0lIqQ1E
 Ipu48rRu1+W1BrMRhfzAOYkgJXtgYM83oDuVan8kdtNw/SkwHQzrc7XYA6D5W5z2

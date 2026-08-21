@@ -8,7 +8,7 @@ def test_success_1(backend: EchoedRequest):
     jwt_token = jwt.encode(
         {
             "exp": time.time() + 3600,
-            "nbf": time.time() - 1,
+            "nbf": time.time() + 3,
             "banner_name": "承诺",
             "api_version": 0,
             "game_version": 1.41,

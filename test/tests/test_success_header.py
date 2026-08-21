@@ -6,8 +6,8 @@ import time
 def test_success_header():
     jwt_token = jwt.encode(
         {
-            "exp": time.time(),
-            "nbf": time.time(),
+            "exp": time.time() + 2,
+            "nbf": time.time() - 3,
             "jwt_validate": "jwt_validate"
         },
         "test_secret_key_32_bytes_long!!!",

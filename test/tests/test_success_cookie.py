@@ -6,8 +6,8 @@ import time
 def test_success_cookie():
     jwt_token = jwt.encode(
         {
-            "exp": time.time(),
-            "nbf": time.time(),
+            "exp": time.time() + 5,
+            "nbf": time.time() - 5,
             "jwt_validate": "jwt_validate"
         },
         "test_secret_key_32_bytes_long!!!",

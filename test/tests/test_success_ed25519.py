@@ -5,8 +5,8 @@ import time
 def test_success_ed25519():
     with Session() as session:
         jwt_token = jwt.encode(
-            {"exp": time.time(),
-            "nbf": time.time(),
+            {"exp": time.time() + 2,
+            "nbf": time.time() + 2,
             "food": {"truth": "There is no food", "food": [None]}},
             "-----BEGIN PRIVATE KEY-----MC4CAQAwBQYDK2VwBCIEIP8AHcZCyoeAzEq68CFKLrgGI2UpsC5ce9INGStPnfo0-----END PRIVATE KEY-----",
             "EdDSA", # Ed25519

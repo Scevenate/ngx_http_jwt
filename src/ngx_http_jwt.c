@@ -32,10 +32,11 @@ typedef struct {
 } ngx_http_jwt_location_t;
 
 typedef enum {
-    NGX_HTTP_JWT_ASSERT_EQUALS,
-    NGX_HTTP_JWT_ASSERT_EXP,
-    NGX_HTTP_JWT_ASSERT_NBF,
-    NGX_HTTP_JWT_ASSERT_IN
+    NGX_HTTP_JWT_ASSERT_EXISTS, // No value
+    NGX_HTTP_JWT_ASSERT_EQUALS, // Any value
+    NGX_HTTP_JWT_ASSERT_EXP, // Default 0, always >= 0
+    NGX_HTTP_JWT_ASSERT_NBF, // Default 0, always >= 0
+    NGX_HTTP_JWT_ASSERT_IN // Array
 } ngx_http_jwt_assert_predicate_t;
 
 typedef struct {
@@ -107,7 +108,7 @@ static ngx_command_t  ngx_http_jwt_commands[] = {
     NULL },
 
     { ngx_string("jwt_assert"),
-    NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE3,
+    NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE23,
     ngx_conf_set_assert_slot,
     NGX_HTTP_LOC_CONF_OFFSET,
     offsetof(ngx_http_jwt_loc_conf_t, assert),
@@ -315,10 +316,12 @@ static char *ngx_conf_set_assert_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *
     char* p = conf;
 
     ngx_http_jwt_assert_t *field;
+    ngx_int_t nelts;
     ngx_str_t *value;
     ngx_conf_post_t *post;
 
     field = (ngx_http_jwt_assert_t *) (p + cmd->offset);
+    nelts = cf->args->nelts;
     value = cf->args->elts;
 
     ngx_queue_t *q;
@@ -329,8 +332,10 @@ static char *ngx_conf_set_assert_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *
         return "got invalid claim name";
     }
 
-    if (value[3].len == 0 || value[3].len >= NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX) {
-        return "got invalid claim value";
+    // 2 is not arbitrary (see below)
+    // This is predicate ENUM, so we don't really care how long it is
+    if (value[2].len < 2) { 
+        return "got invalid predicate";
     }
 
     for (q = ngx_queue_head(&field->claims);
@@ -344,37 +349,64 @@ static char *ngx_conf_set_assert_slot(ngx_conf_t *cf, ngx_command_t *cmd, void *
 
     claim = ngx_palloc(cf->pool, sizeof(ngx_http_jwt_assert_claim_t));
     if (claim == NULL) return NGX_CONF_ERROR;
-    json = json_loads((const char *) value[3].data,
-        JSON_DECODE_ANY | JSON_REJECT_DUPLICATES, NULL);
-    if (json == NULL) return "got invalid claim value";
 
     claim->name = value[1];
-    claim->value = json;
 
-    switch (value[2].data[0]) {
-        case '=':
-            if (ngx_strcmp(value[2].data, "==") != 0) return "got invalid predicate";
-            claim->predicate = NGX_HTTP_JWT_ASSERT_EQUALS;
-            break;
-        case 'i':
-            if (ngx_strcmp(value[2].data, "in") != 0) return "got invalid predicate";
-            claim->predicate = NGX_HTTP_JWT_ASSERT_IN;
-            if (!json_is_array(claim->value)) return "got invalid claim value";
-            break;
-        case 'e':
-            if (ngx_strcmp(value[2].data, "exp") != 0) return "got invalid predicate";
-            claim->predicate = NGX_HTTP_JWT_ASSERT_EXP;
-            if (!json_is_number(json)) return "got invalid claim value";
-            if (json_number_value(json) < 0 || json_number_value(json) > NGX_HTTP_JWT_LEEWAY_MAX) return "got invalid claim value";
-            break;
-        case 'n':
-            if (ngx_strcmp(value[2].data, "nbf") != 0) return "got invalid predicate";
-            claim->predicate = NGX_HTTP_JWT_ASSERT_NBF;
-            if (!json_is_number(json)) return "got invalid claim value";
-            if (json_number_value(json) < 0 || json_number_value(json) > NGX_HTTP_JWT_LEEWAY_MAX) return "got invalid claim value";
-            break;
-        default:
-            return "got invalid predicate";
+    if (nelts == 3) {
+        switch (value[2].data[2]) { // "ex"ists and "ex"p.
+            case 'i':
+                if (ngx_strcmp(value[2].data, "exists") != 0) return "got invalid predicate";
+                claim->predicate = NGX_HTTP_JWT_ASSERT_EXISTS;
+                claim->value = NULL;
+                break;
+            case 'p':
+                if (ngx_strcmp(value[2].data, "exp") != 0) return "got invalid predicate";
+                claim->predicate = NGX_HTTP_JWT_ASSERT_EXP;
+                claim->value = json_loads("0", JSON_DECODE_ANY, NULL);
+                break;
+            case 'f':
+                if (ngx_strcmp(value[2].data, "nbf") != 0) return "got invalid predicate";
+                claim->predicate = NGX_HTTP_JWT_ASSERT_NBF;
+                claim->value = json_loads("0", JSON_DECODE_ANY, NULL);
+                break;
+            default:
+                return "got invalid predicate";
+        }
+    } else /* nelts == 4 */ {
+        if (value[3].len >= NGX_HTTP_JWT_CLAIM_VALUE_LEN_MAX) {
+            return "got invalid claim value";
+        }
+        json = json_loads((const char *) value[3].data, JSON_DECODE_ANY | JSON_REJECT_DUPLICATES, NULL);
+        if (json == NULL) {
+            return "got invalid claim value";
+        }
+        claim->value = json;
+
+        switch (value[2].data[0]) {
+            case '=':
+                if (ngx_strcmp(value[2].data, "==") != 0) return "got invalid predicate";
+                claim->predicate = NGX_HTTP_JWT_ASSERT_EQUALS;
+                break;
+            case 'i':
+                if (ngx_strcmp(value[2].data, "in") != 0) return "got invalid predicate";
+                claim->predicate = NGX_HTTP_JWT_ASSERT_IN;
+                if (!json_is_array(claim->value)) return "got invalid claim value";
+                break;
+            case 'e':
+                if (ngx_strcmp(value[2].data, "exp") != 0) return "got invalid predicate";
+                claim->predicate = NGX_HTTP_JWT_ASSERT_EXP;
+                if (!json_is_number(json)) return "got invalid claim value";
+                if (json_number_value(json) < 0 || json_number_value(json) > NGX_HTTP_JWT_LEEWAY_MAX) return "got invalid claim value";
+                break;
+            case 'n':
+                if (ngx_strcmp(value[2].data, "nbf") != 0) return "got invalid predicate";
+                claim->predicate = NGX_HTTP_JWT_ASSERT_NBF;
+                if (!json_is_number(json)) return "got invalid claim value";
+                if (json_number_value(json) < 0 || json_number_value(json) > NGX_HTTP_JWT_LEEWAY_MAX) return "got invalid claim value";
+                break;
+            default:
+                return "got invalid predicate";
+        }
     }
 
     ngx_queue_insert_tail(&field->claims, &claim->queue);
@@ -891,6 +923,8 @@ static int ngx_http_jwt_request_handler_checker_callback(jwt_t *jwt, jwt_config_
         }
 
         switch (assert_claim->predicate) {
+            case NGX_HTTP_JWT_ASSERT_EXISTS:
+                break;
             case NGX_HTTP_JWT_ASSERT_EQUALS:
                 if (json_equal(value, assert_claim->value) != 1) {
                     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "JWT authorization: assertd claim %V has invalid value", &assert_claim->name);
