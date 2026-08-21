@@ -1,7 +1,7 @@
 # ngx_http_jwt
 
 > [!IMPORTANT]
-> This module initially intends to progressively provide more powerful control over existing nginx jwt solutions. However after reviewing the features of the product, it does not seem to add much value. Therefore this project is no longer maintained.
+> This project is under major v2 rework. Main branch is not in a consistent state.
 
 ## [Documentation](docs/index.md)
 
